@@ -12,30 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+import os
+from dotenv import load_dotenv
+from langtrace_python_sdk import langtrace
+
+load_dotenv()
+
+# if os.getenv("LANGTRACE_API_KEY"):
+langtrace.init(
+    # api_host=os.getenv("LANGTRACE_API_HOST"),
+    api_key=os.getenv("LANGTRACE_API_KEY"),
+    batch=False
+)
 import argparse
 import datetime
 import json
-import os
 import shutil
 import string
 import sys
 
+
+
 from crewai import Agent, Crew, Process, Task
-from dotenv import load_dotenv
-from langtrace_python_sdk import langtrace
 
 from ciso_agent.llm import init_agent_llm, extract_code
 from ciso_agent.tools.generate_kyverno import GenerateKyvernoTool
 from ciso_agent.tools.run_kubectl import RunKubectlTool
 
 
-load_dotenv()
-
-if os.getenv("LANGTRACE_API_HOST"):
-    langtrace.init(
-        api_host=os.getenv("LANGTRACE_API_HOST"),
-        api_key=os.getenv("LANGTRACE_API_KEY"),
-    )
 
 
 class KubernetesKyvernoCrew(object):

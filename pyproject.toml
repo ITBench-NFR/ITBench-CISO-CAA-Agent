@@ -13,7 +13,8 @@ litellm = "1.49.4"
 langchain = "0.3.15"
 langchain-ibm = "0.3.5"
 langgraph = "0.2.65"
-langtrace-python-sdk = "3.3.29"
+langtrace-python-sdk = "3.8.21"
+openai = ">=1.90.0"
 
 # indirect dependencies but specify versions here
 # to reduce install time that can be very long if not specified
