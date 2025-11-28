@@ -252,3 +252,4 @@ wrapt==1.17.2 ; python_version >= "3.10" and python_version < "3.13"
 wsproto==1.2.0 ; python_version >= "3.10" and python_version < "3.13"
 yarl==1.18.3 ; python_version >= "3.10" and python_version < "3.13"
 zipp==3.21.0 ; python_version >= "3.10" and python_version < "3.13"
+langchain-google-genai

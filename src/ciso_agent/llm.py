@@ -19,10 +19,12 @@ from crewai import LLM
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_ibm import ChatWatsonx
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 api_domain_watsonx = "cloud.ibm.com"
 api_domain_azure = "azure.com"
 api_domain_azure_api = "azure-api.net"
+api_domain_google = "googleapis.com"
 
 # Retreives and Returns Model, API URL and API key in that order from .env
 def get_llm_params(model: str = "", api_url: str = "", api_key: str = ""):
@@ -36,6 +38,8 @@ def get_llm_params(model: str = "", api_url: str = "", api_key: str = ""):
 
     # get API key (if API is ollama, API key is not necessary)
     api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+
+    api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
     return model, api_url, api_key
 
@@ -66,6 +70,13 @@ def init_agent_llm(model: str = "", api_url: str = "", api_key: str = ""):
             api_key=api_key,
             **kwargs,
         )
+    elif "gemini" in model.lower():
+        llm = LLM(
+            model= "gemini/"+model,
+            base_url=api_url,
+            api_key=api_key,
+            temperature=temperature,
+        )
     else:
         llm = LLM(
             model=model,
@@ -91,6 +102,8 @@ def init_llm(model: str = "", api_url: str = "", api_key: str = ""):
         if "api-version" in params:
             kwargs["api_version"] = params["api-version"]
         return AzureChatOpenAI(temperature=temperature, model=model, api_key=api_key, base_url=api_url, **kwargs)
+    elif "gemini" in model.lower():
+        return ChatGoogleGenerativeAI(model=model, google_api_key=api_key, temperature=temperature)
     elif "gpt" in model.lower():
         return ChatOpenAI(temperature=temperature, model=model, api_key=api_key, base_url=api_url)
 
@@ -109,6 +122,8 @@ def init_watsonx_llm(model: str = "", api_url: str = "", api_key: str = "", proj
     )
     return llm
 
+def is_google_api(api_url: str):
+    return api_url and api_domain_google in api_url
 
 def is_watsonx_api(api_url: str):
     return api_url and api_domain_watsonx in api_url
