@@ -15,16 +15,25 @@
 
 import os
 from dotenv import load_dotenv
-from langtrace_python_sdk import langtrace
+
+from langfuse import Langfuse, observe, get_client
+import time
+from langfuse.api.resources.commons.types.trace_with_details import TraceWithDetails
+from langfuse.api.resources.observations.types.observations_views import ObservationsViews
+import typing
+from openinference.instrumentation.crewai import CrewAIInstrumentor
+from openinference.instrumentation.langchain import LangChainInstrumentor
+from openinference.instrumentation.litellm import LiteLLMInstrumentor
+
 
 load_dotenv()
 
 # if os.getenv("LANGTRACE_API_KEY"):
-langtrace.init(
-    # api_host=os.getenv("LANGTRACE_API_HOST"),
-    api_key=os.getenv("LANGTRACE_API_KEY"),
-    batch=False
-)
+# langtrace.init(
+#     # api_host=os.getenv("LANGTRACE_API_HOST"),
+#     api_key=os.getenv("LANGTRACE_API_KEY"),
+#     batch=False
+# )
 import argparse
 import datetime
 import json
@@ -33,14 +42,18 @@ import string
 import sys
 
 
-
 from crewai import Agent, Crew, Process, Task
 
 from ciso_agent.llm import init_agent_llm, extract_code
 from ciso_agent.tools.generate_kyverno import GenerateKyvernoTool
 from ciso_agent.tools.run_kubectl import RunKubectlTool
 
+langfuse = get_client()
 
+# langfuse = get_client()
+# openlit.init(
+#     otlp_endpoint="http://127.0.0.1:4318"
+# )
 
 
 class KubernetesKyvernoCrew(object):
@@ -70,9 +83,35 @@ Once you get a final answer, you can quit the work.
 
     workdir_root: str = "/tmp/agent/"
 
+    # @observe()
     def kickoff(self, inputs: dict):
-        return self.run_scenario(**inputs)
+        # langfuse = get_client()
+        # start_time = time.time()
+        CrewAIInstrumentor().instrument(skip_dep_check=True)
+        LangChainInstrumentor().instrument(skip_dep_check=True)
+        LiteLLMInstrumentor().instrument(skip_dep_check=True)
+        return_value = self.run_scenario(**inputs)
+        # end_time = time.time()
+        langfuse.flush()
+        time.sleep(20)  # wait for trace to be available
+        traces = langfuse.api.trace.list()
+        if traces.data and len(traces.data) > 0:
+            trace_detail = traces.data[0]  # Most recent trace
+            # trace_id = trace.id
 
+            # # Fetch full trace details
+            # trace_detail = langfuse.api.trace.get(trace_id)
+
+            # Extract metrics
+            observations = langfuse.api.observations.get_many(trace_id=trace_detail.id)
+            print("Observations page data:")
+            print(observations.meta)
+            self._extract_metrics_from_trace(observations)
+            # print(metrics)
+
+        return return_value
+
+    # @observe()
     def run_scenario(self, goal: str, **kwargs):
         workdir = kwargs.get("workdir")
         if not workdir:
@@ -146,7 +185,9 @@ You can omit `namespace` in `deployed_resource` if the policy is a cluster-scope
             cache=False,
         )
         inputs = {}
-        output = crew.kickoff(inputs=inputs)
+        with langfuse.start_as_current_observation(as_type="span", name="crewai-index-trace"):
+            output = crew.kickoff(inputs=inputs)
+        # print_attributes(output)
         result_str = output.raw.strip()
         if not result_str:
             raise ValueError("crew agent returned an empty string.")
@@ -170,6 +211,38 @@ You can omit `namespace` in `deployed_resource` if the policy is a cluster-scope
                 result[key] = os.path.join(workdir, val)
 
         return {"result": result}
+
+    def _extract_metrics_from_trace(self, observations: ObservationsViews):
+        """Extract metrics from Langfuse trace data"""
+        print("\n" + "=" * 80)
+        print("TRACE OBSERVATIONS")
+        print("=" * 80)
+
+        for idx, obs in enumerate(observations.data, 1):
+            print(f"\n📊 Observation #{idx}")
+            print(f"{'─'*80}")
+
+            # Get all attributes (excluding private/magic methods)
+            all_attrs = [attr for attr in dir(obs) if not attr.startswith("_")]
+
+            for attr in sorted(all_attrs):
+                try:
+                    value = getattr(obs, attr)
+                    # Skip methods/callables
+                    if not callable(value):
+                        # Format attribute name with proper spacing
+                        attr_display = attr.replace("_", " ").title()
+                        # Truncate long values
+                        value_str = str(value)
+                        if len(value_str) > 100:
+                            value_str = value_str[:97] + "..."
+                        print(f"  {attr_display:<25} {value_str}")
+                except Exception as e:
+                    print(f"  {attr:<25} <Error: {str(e)[:50]}>")
+
+        print(f"\n{'='*80}")
+        print(f"Total Observations: {len(observations.data)}")
+        print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":
