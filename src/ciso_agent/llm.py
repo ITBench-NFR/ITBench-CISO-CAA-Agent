@@ -77,6 +77,13 @@ def init_agent_llm(model: str = "", api_url: str = "", api_key: str = ""):
             api_key=api_key,
             temperature=temperature,
         )
+    elif "qwen" in model.lower():
+        llm = LLM(
+            model= "hosted_vllm/"+model,
+            base_url=api_url,
+            api_key=api_key,
+            temperature=temperature,
+        )
     else:
         llm = LLM(
             model=model,
@@ -104,7 +111,7 @@ def init_llm(model: str = "", api_url: str = "", api_key: str = ""):
         return AzureChatOpenAI(temperature=temperature, model=model, api_key=api_key, base_url=api_url, **kwargs)
     elif "gemini" in model.lower():
         return ChatGoogleGenerativeAI(model=model, google_api_key=api_key, temperature=temperature)
-    elif "gpt" in model.lower():
+    elif "gpt" in model.lower() or "qwen" in model.lower():
         return ChatOpenAI(temperature=temperature, model=model, api_key=api_key, base_url=api_url)
 
     return None
@@ -198,7 +205,7 @@ def call_llm(prompt: str, model: str = "", api_key: str = "", api_url: str = "")
 
     model_lower = model.lower()
     system_prompt = ""
-    if "llama" in model_lower:
+    if "llama" in model_lower or "qwen" in model_lower:
         system_prompt = """<|start_of_role|>system<|end_of_role|>You always answer the questions with markdown formatting using GitHub syntax.
 The markdown formatting you support: headings, bold, italic, links, tables, lists, code blocks, and blockquotes.
 You must omit that you answer the questions with markdown.
