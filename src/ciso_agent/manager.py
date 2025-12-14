@@ -26,6 +26,7 @@ from ciso_agent.agents.kubernetes_kubectl_opa import KubernetesKubectlOPACrew
 from ciso_agent.agents.kubernetes_kyverno import KubernetesKyvernoCrew
 from ciso_agent.agents.kubernetes_kyverno_plan_execute import KubernetesKyvernoPlanExecute
 from ciso_agent.agents.rhel_playbook_opa import RHELPlaybookOPACrew
+from ciso_agent.agents.token_generation_speed_benchmark import TokenGenerationSpeedBenchmarkAgent
 from ciso_agent.llm import get_llm_params, call_llm, extract_code
 
 load_dotenv()
@@ -40,6 +41,7 @@ else:
 
 kubernetes_kubectl_opa_crew = KubernetesKubectlOPACrew()
 rhel_playbook_opa_crew = RHELPlaybookOPACrew()
+token_generation_speed_agent = TokenGenerationSpeedBenchmarkAgent()
 
 
 sub_agent_descs = {
@@ -60,6 +62,12 @@ sub_agent_descs = {
         "tool": rhel_playbook_opa_crew.tool_description,
         "input": rhel_playbook_opa_crew.input_description,
         "output": rhel_playbook_opa_crew.output_description,
+    },
+    "token_generation_speed_benchmark": {
+        "goal": token_generation_speed_agent.agent_goal,
+        "tool": token_generation_speed_agent.tool_description,
+        "input": token_generation_speed_agent.input_description,
+        "output": token_generation_speed_agent.output_description,
     },
 }
 
@@ -100,6 +108,7 @@ class CISOManager:
         workflow.add_node("kubernetes_kyverno", kubernetes_kyverno_crew.kickoff)
         workflow.add_node("kubernetes_kubectl_opa", kubernetes_kubectl_opa_crew.kickoff)
         workflow.add_node("rhel_playbook_opa", rhel_playbook_opa_crew.kickoff)
+        workflow.add_node("token_generation_speed_benchmark", token_generation_speed_agent.kickoff)
         workflow.add_node("reporter", self.reporter)
 
         workflow.set_entry_point("task_selector")
@@ -111,6 +120,7 @@ class CISOManager:
         workflow.add_edge("kubernetes_kyverno", "task_handler")
         workflow.add_edge("kubernetes_kubectl_opa", "task_handler")
         workflow.add_edge("rhel_playbook_opa", "task_handler")
+        workflow.add_edge("token_generation_speed_benchmark", "task_handler")
         workflow.add_edge("reporter", END)
 
         self.app = workflow.compile()
@@ -191,7 +201,12 @@ Expected Output:
         # Task Selection
         agent_task = None
         goal_lower = goal.lower()
-        if "kyverno" in goal_lower:
+        if "token generation speed" in goal_lower or "tokens/sec" in goal_lower or "tokens per second" in goal_lower:
+            agent_task = Action(
+                description="token_generation_speed_benchmark",
+                node="token_generation_speed_benchmark",
+            )
+        elif "kyverno" in goal_lower:
             agent_task = Action(
                 description="kubernetes_kyverno",
                 node="kubernetes_kyverno",
@@ -236,12 +251,13 @@ Expected Output:
         next_index = task_index + 1
         return {"route": route, "task_index": next_index}
 
-    def switch_routes(self, state: CISOState) -> Literal["kubernetes_kyverno", "kubernetes_kubectl_opa", "rhel_playbook_opa", "reporter"]:
+    def switch_routes(self, state: CISOState) -> Literal["kubernetes_kyverno", "kubernetes_kubectl_opa", "rhel_playbook_opa", "token_generation_speed_benchmark", "reporter"]:
         route = state["route"]
         crew_nodes = [
             "kubernetes_kyverno",
             "kubernetes_kubectl_opa",
             "rhel_playbook_opa",
+            "token_generation_speed_benchmark",
             "reporter",
         ]
         if route and route in crew_nodes:
