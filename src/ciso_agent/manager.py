@@ -201,7 +201,7 @@ Expected Output:
         # Task Selection
         agent_task = None
         goal_lower = goal.lower()
-        if "ttft" in goal_lower or "time to first token" in goal_lower or "benchmark" in goal_lower:
+        if "ttft" in goal_lower or "time to first token" in goal_lower:
             agent_task = Action(
                 description="ttft_benchmark",
                 node="ttft_benchmark",
