@@ -16,27 +16,25 @@ import argparse
 import datetime
 import json
 import os
-import shutil
-import string
+import shutil   
 import sys
+import time
+from dotenv import load_dotenv
 
 from crewai import Agent, Crew, Process, Task
-from dotenv import load_dotenv
-from langtrace_python_sdk import langtrace
+from langfuse import get_client
+
+from ciso_agent.tracing import extract_metrics_from_trace
+from openinference.instrumentation.crewai import CrewAIInstrumentor
+from openinference.instrumentation.langchain import LangChainInstrumentor
+from openinference.instrumentation.litellm import LiteLLMInstrumentor
 
 from ciso_agent.llm import init_agent_llm, extract_code
 from ciso_agent.tools.generate_kyverno import GenerateKyvernoTool
 from ciso_agent.tools.run_kubectl import RunKubectlTool
 
-
 load_dotenv()
-
-if os.getenv("LANGTRACE_API_HOST"):
-    langtrace.init(
-        api_host=os.getenv("LANGTRACE_API_HOST"),
-        api_key=os.getenv("LANGTRACE_API_KEY"),
-    )
-
+langfuse = get_client()
 
 class KubernetesKyvernoUpdateCrew(object):
     agent_goal: str = """Currently, the following Kyverno policies are deployed in the Kubernetes cluster.
@@ -77,7 +75,20 @@ Once you get a final answer, you can quit the work.
     workdir_root: str = "/tmp/agent/"
 
     def kickoff(self, inputs: dict):
-        return self.run_scenario(**inputs)
+        CrewAIInstrumentor().instrument(skip_dep_check=True)
+        LangChainInstrumentor().instrument(skip_dep_check=True)
+        LiteLLMInstrumentor().instrument(skip_dep_check=True)
+        return_value = self.run_scenario(**inputs)
+        langfuse.flush()
+        time.sleep(20)  # wait for trace to be available
+        traces = langfuse.api.trace.list()
+        if traces.data and len(traces.data) > 0:
+            trace_detail = traces.data[0]  # Most recent trace
+            observations = langfuse.api.observations.get_many(trace_id=trace_detail.id)
+            # print("Observations page data:")
+            # print(observations.meta)
+            extract_metrics_from_trace(observations)
+        return return_value
 
     def run_scenario(self, goal: str, **kwargs):
         workdir = kwargs.get("workdir")
