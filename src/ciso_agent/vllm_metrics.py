@@ -101,7 +101,12 @@ class VLLMMetricsCollector:
             )
 
         # vLLM metrics endpoint is the prometheus_url + /metrics
-        self.vllm_metrics_url = vllm_metrics_url or f"{self.prometheus_url}/metrics"
+        self.vllm_metrics_url = vllm_metrics_url or os.getenv("VLLM_METRICS_URL")
+        if not self.vllm_metrics_url:
+            raise RuntimeError(
+                "VLLM_METRICS_URL environment variable must be set to use vLLM metrics collection"
+            )
+
         self.idle_timeout = idle_timeout
         self.idle_poll_interval = idle_poll_interval
 
