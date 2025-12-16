@@ -26,7 +26,7 @@ def extract_metrics_from_trace(observations_data: List[ObservationsView]):
         return str(obj)
 
     try:
-        with open("observations_dump.json", "w") as f:
+        with open("/tmp/agent/ciso_traces/observations_dump.json", "w") as f:
             json.dump(all_observations_data, f, default=json_serial, indent=2)
         print(f"\n[INFO] Observations dumped to 'observations_dump.json'")
     except Exception as e:

@@ -32,6 +32,7 @@ from ciso_agent.llm import init_agent_llm, extract_code
 from ciso_agent.tools.generate_opa_rego import GenerateOPARegoTool
 from ciso_agent.tools.run_opa_rego import RunOPARegoTool
 from ciso_agent.tools.run_kubectl import RunKubectlTool
+from ciso_agent.vllm_metrics import VLLMMetricsCollector, is_vllm_metrics_enabled
 
 
 load_dotenv()
@@ -77,7 +78,31 @@ Once you get a final answer, you can quit the work.
         CrewAIInstrumentor().instrument(skip_dep_check=True)
         LangChainInstrumentor().instrument(skip_dep_check=True)
         LiteLLMInstrumentor().instrument(skip_dep_check=True)
+
+        # Initialize vLLM metrics collector (only if VLLM_PROMETHEUS_URL is set)
+        workdir = inputs.get("workdir", self.workdir_root)
+        metrics_collector = None
+        
+        if is_vllm_metrics_enabled():
+            test_case_id = f"kubectl_opa_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            try:
+                metrics_collector = VLLMMetricsCollector()
+                metrics_collector.start_collection(test_case_id)
+            except Exception as e:
+                print(f"[WARN] Failed to start vLLM metrics collection: {e}")
+                metrics_collector = None
+
         return_value = self.run_scenario(**inputs)
+
+        # End vLLM metrics collection and save (only if enabled and started successfully)
+        if metrics_collector is not None:
+            try:
+                metrics_collector.end_collection()
+                traces_dir = os.path.join(workdir, "ciso_traces")
+                metrics_collector.save_metrics(traces_dir)
+            except Exception as e:
+                print(f"[WARN] Failed to collect/save vLLM metrics: {e}")
+
         langfuse.flush()
         time.sleep(20)  # wait for trace to be available
         traces = langfuse.api.trace.list()
