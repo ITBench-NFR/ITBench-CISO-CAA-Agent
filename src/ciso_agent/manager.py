@@ -24,7 +24,6 @@ from langgraph.graph import END, StateGraph
 
 from ciso_agent.agents.kubernetes_kubectl_opa import KubernetesKubectlOPACrew
 from ciso_agent.agents.kubernetes_kyverno import KubernetesKyvernoCrew
-from ciso_agent.agents.kubernetes_kyverno_plan_execute import KubernetesKyvernoPlanExecute
 from ciso_agent.agents.rhel_playbook_opa import RHELPlaybookOPACrew
 from ciso_agent.agents.ttft_benchmark import TTFTBenchmarkAgent
 from ciso_agent.agents.token_generation_speed_benchmark import TokenGenerationSpeedBenchmarkAgent
@@ -32,13 +31,8 @@ from ciso_agent.llm import get_llm_params, call_llm, extract_code
 
 load_dotenv()
 
-agent_type = os.getenv("AGENT_TYPE", "crew")
-if agent_type == "plan_execute":
-    kubernetes_kyverno_crew = KubernetesKyvernoPlanExecute()
-    print("Using KubernetesKyvernoPlanExecute agent")
-else:
-    kubernetes_kyverno_crew = KubernetesKyvernoCrew()
-    print("Using KubernetesKyvernoCrew agent")
+kubernetes_kyverno_crew = KubernetesKyvernoCrew()
+print("Using KubernetesKyvernoCrew agent")
 
 kubernetes_kubectl_opa_crew = KubernetesKubectlOPACrew()
 rhel_playbook_opa_crew = RHELPlaybookOPACrew()
