@@ -17,26 +17,25 @@ import datetime
 import json
 import os
 import string
+import time
 
 from crewai import Agent, Crew, Process, Task
 from dotenv import load_dotenv
 from langtrace_python_sdk import langtrace
+from langfuse import get_client
 
 from ciso_agent.llm import init_agent_llm, extract_code
 from ciso_agent.tools.generate_opa_rego import GenerateOPARegoTool
 from ciso_agent.tools.run_opa_rego import RunOPARegoTool
 from ciso_agent.tools.generate_playbook import GeneratePlaybookTool
 from ciso_agent.tools.run_playbook import RunPlaybookTool
-
+from openinference.instrumentation.crewai import CrewAIInstrumentor
+from openinference.instrumentation.langchain import LangChainInstrumentor
+from openinference.instrumentation.litellm import LiteLLMInstrumentor
+from ciso_agent.tracing import extract_metrics_from_trace
 
 load_dotenv()
-
-if os.getenv("LANGTRACE_API_HOST"):
-    langtrace.init(
-        api_host=os.getenv("LANGTRACE_API_HOST"),
-        api_key=os.getenv("LANGTRACE_API_KEY"),
-    )
-
+langfuse = get_client()
 
 class RHELPlaybookOPACrew(object):
     agent_goal: str = """I would like to check if the following condition is satisfiled, given a host name `rhel9_servers`
@@ -75,7 +74,29 @@ Once you get a final answer, you can quit the work.
     workdir_root: str = "/tmp/agent/"
 
     def kickoff(self, inputs: dict):
-        return self.run_scenario(**inputs)
+        CrewAIInstrumentor().instrument(skip_dep_check=True)
+        LangChainInstrumentor().instrument(skip_dep_check=True)
+        LiteLLMInstrumentor().instrument(skip_dep_check=True)
+        return_value = self.run_scenario(**inputs)
+        langfuse.flush()
+        time.sleep(20)  # wait for trace to be available
+        traces = langfuse.api.trace.list()
+        if traces.data and len(traces.data) > 0:
+            trace_detail = traces.data[0]  # Most recent trace
+            all_observations = []
+            page = 1
+            while True:
+                observations = langfuse.api.observations.get_many(trace_id=trace_detail.id, page=page, limit=50)
+                if not observations.data:
+                    break
+                all_observations.extend(observations.data)
+                if page >= observations.meta.total_pages:
+                    break
+                page += 1
+                
+            print(f"Total observations fetched: {len(all_observations)}")
+            extract_metrics_from_trace(all_observations)
+        return return_value
 
     def run_scenario(self, goal: str, **kwargs):
         workdir = kwargs.get("workdir")

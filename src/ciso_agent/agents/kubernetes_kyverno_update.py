@@ -32,6 +32,7 @@ from openinference.instrumentation.litellm import LiteLLMInstrumentor
 from ciso_agent.llm import init_agent_llm, extract_code
 from ciso_agent.tools.generate_kyverno import GenerateKyvernoTool
 from ciso_agent.tools.run_kubectl import RunKubectlTool
+from ciso_agent.tracing import extract_metrics_from_trace
 
 load_dotenv()
 langfuse = get_client()
@@ -84,10 +85,19 @@ Once you get a final answer, you can quit the work.
         traces = langfuse.api.trace.list()
         if traces.data and len(traces.data) > 0:
             trace_detail = traces.data[0]  # Most recent trace
-            observations = langfuse.api.observations.get_many(trace_id=trace_detail.id)
-            # print("Observations page data:")
-            # print(observations.meta)
-            extract_metrics_from_trace(observations)
+            all_observations = []
+            page = 1
+            while True:
+                observations = langfuse.api.observations.get_many(trace_id=trace_detail.id, page=page, limit=50)
+                if not observations.data:
+                    break
+                all_observations.extend(observations.data)
+                if page >= observations.meta.total_pages:
+                    break
+                page += 1
+                
+            print(f"Total observations fetched: {len(all_observations)}")
+            extract_metrics_from_trace(all_observations)
         return return_value
 
     def run_scenario(self, goal: str, **kwargs):
