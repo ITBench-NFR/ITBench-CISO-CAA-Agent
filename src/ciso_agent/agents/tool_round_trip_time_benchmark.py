@@ -36,7 +36,7 @@ load_dotenv()
 
 
 class ToolRoundTripTimeCallback(BaseCallbackHandler):
-    """Callback handler to measure tool round-trip time and LLM thinking time."""
+    """Callback handler to measure tool round-trip time and processing overhead time."""
     
     def __init__(self):
         super().__init__()
@@ -56,26 +56,26 @@ class ToolRoundTripTimeCallback(BaseCallbackHandler):
         if self.request_start_time is None:
             self.request_start_time = current_time
         
-        # Record thinking time from last tool end (or request start) to LLM start
-        # Thinking time is the gap between tool completion and LLM processing start
-        # This represents the time the system spends preparing/thinking before the next LLM call
+        # Record processing time from last tool end (or request start) to LLM start
+        # Processing time is the gap between tool completion and LLM processing start
+        # This represents the time the system spends processing results, serialization, and overhead
         if self.last_tool_end_time is not None:
             # Time from last tool completion to this LLM start
-            thinking_time = current_time - self.last_tool_end_time
+            processing_time = current_time - self.last_tool_end_time
         elif self.last_llm_end_time is not None:
             # If no tool was called, measure from last LLM end (for first LLM call after another)
-            thinking_time = current_time - self.last_llm_end_time
+            processing_time = current_time - self.last_llm_end_time
         elif self.request_start_time is not None:
             # First LLM call - time from request start
-            thinking_time = current_time - self.request_start_time
+            processing_time = current_time - self.request_start_time
         else:
-            thinking_time = 0.0
+            processing_time = 0.0
         
         self.current_llm_start = current_time
         
         self.llm_calls.append({
             "llm_start_time": current_time,
-            "thinking_time_before": thinking_time,
+            "processing_time_before": processing_time,
         })
     
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
@@ -110,7 +110,7 @@ class ToolRoundTripTimeCallback(BaseCallbackHandler):
             self.tool_calls[-1]["tool_end_time"] = current_time
             self.tool_calls[-1]["tool_round_trip_time"] = current_time - self.current_tool_start
             self.tool_calls[-1]["output_length"] = len(output) if output else 0
-            self.last_tool_end_time = current_time  # Track when tool ended for thinking time calculation
+            self.last_tool_end_time = current_time  # Track when tool ended for processing time calculation
             self.current_tool_start = None
             self.current_tool_name = None
     
@@ -122,7 +122,7 @@ class ToolRoundTripTimeCallback(BaseCallbackHandler):
             self.tool_calls[-1]["tool_end_time"] = current_time
             self.tool_calls[-1]["tool_round_trip_time"] = current_time - self.current_tool_start
             self.tool_calls[-1]["error"] = str(error)
-            self.last_tool_end_time = current_time  # Track when tool ended for thinking time calculation
+            self.last_tool_end_time = current_time  # Track when tool ended for processing time calculation
             self.current_tool_start = None
             self.current_tool_name = None
     
@@ -134,21 +134,21 @@ class ToolRoundTripTimeCallback(BaseCallbackHandler):
             if "tool_round_trip_time" in call
         ]
     
-    def get_llm_thinking_times(self) -> List[float]:
-        """Get list of all LLM thinking times (time before LLM calls)."""
+    def get_llm_processing_times(self) -> List[float]:
+        """Get list of all processing times (time before LLM calls, after tool completion)."""
         return [
-            call["thinking_time_before"]
+            call["processing_time_before"]
             for call in self.llm_calls
-            if "thinking_time_before" in call
+            if "processing_time_before" in call
         ]
     
     def get_total_tool_time(self) -> float:
         """Get total time spent in tool execution."""
         return sum(self.get_tool_round_trip_times())
     
-    def get_total_thinking_time(self) -> float:
-        """Get total time spent in LLM thinking."""
-        return sum(self.get_llm_thinking_times())
+    def get_total_processing_time(self) -> float:
+        """Get total time spent in processing overhead (between tool completion and LLM calls)."""
+        return sum(self.get_llm_processing_times())
     
     def get_total_llm_time(self) -> float:
         """Get total time spent in LLM calls."""
@@ -169,14 +169,14 @@ class ToolRoundTripTimeBenchmarkAgent(object):
     """
     
     agent_goal: str = """Benchmark Tool Round-Trip Time (TRTT) for agent interactions with tools.
-    This agent measures the latency specifically attributed to tool execution vs. LLM thinking time."""
+    This agent measures the latency specifically attributed to tool execution vs. processing overhead time."""
     
     tool_description: str = """This agent performs Tool Round-Trip Time benchmarking by:
     - Making agent calls that use tools
     - Measuring time from tool call start to tool return
-    - Measuring LLM thinking time (time between tool calls)
+    - Measuring processing overhead time (time between tool completion and LLM calls)
     - Running multiple iterations for statistical accuracy
-    - Reporting metrics (mean, median, min, max, stddev) for both tool execution and thinking time"""
+    - Reporting metrics (mean, median, min, max, stddev) for both tool execution and processing time"""
     
     input_description: dict = {
         "prompt": "The prompt to send to the agent that will trigger tool usage",
@@ -267,7 +267,7 @@ class ToolRoundTripTimeBenchmarkAgent(object):
         
         # Run benchmark iterations
         all_tool_times: List[float] = []
-        all_thinking_times: List[float] = []
+        all_processing_times: List[float] = []
         all_llm_times: List[float] = []
         detailed_results: List[Dict[str, Any]] = []
         
@@ -298,14 +298,14 @@ class ToolRoundTripTimeBenchmarkAgent(object):
                     
                     # Get metrics from callback
                     tool_times = callback.get_tool_round_trip_times()
-                    thinking_times = callback.get_llm_thinking_times()
+                    processing_times = callback.get_llm_processing_times()
                     llm_times = callback.get_total_llm_time()
                     
                     # If no tool calls were made, this iteration didn't use tools
                     # We'll still record it but note that it's a baseline measurement
                     if tool_times:
                         all_tool_times.extend(tool_times)
-                        all_thinking_times.extend(thinking_times)
+                        all_processing_times.extend(processing_times)
                         if llm_times > 0:
                             all_llm_times.append(llm_times)
                         
@@ -314,10 +314,10 @@ class ToolRoundTripTimeBenchmarkAgent(object):
                             "total_time_seconds": total_time,
                             "tool_round_trip_times": tool_times,
                             "num_tool_calls": len(tool_times),
-                            "thinking_times": thinking_times,
+                            "processing_times": processing_times,
                             "llm_time_seconds": llm_times,
                             "total_tool_time": callback.get_total_tool_time(),
-                            "total_thinking_time": callback.get_total_thinking_time(),
+                            "total_processing_time": callback.get_total_processing_time(),
                             "tool_calls_detail": callback.tool_calls,
                             "llm_calls_detail": callback.llm_calls,
                             "timestamp": datetime.now().isoformat(),
@@ -377,18 +377,18 @@ class ToolRoundTripTimeBenchmarkAgent(object):
                 "count": 0,
             }
         
-        # Calculate statistics for thinking times
-        if all_thinking_times:
-            thinking_stats = {
-                "mean": statistics.mean(all_thinking_times),
-                "median": statistics.median(all_thinking_times),
-                "min": min(all_thinking_times),
-                "max": max(all_thinking_times),
-                "stddev": statistics.stdev(all_thinking_times) if len(all_thinking_times) > 1 else 0.0,
-                "count": len(all_thinking_times),
+        # Calculate statistics for processing times
+        if all_processing_times:
+            processing_stats = {
+                "mean": statistics.mean(all_processing_times),
+                "median": statistics.median(all_processing_times),
+                "min": min(all_processing_times),
+                "max": max(all_processing_times),
+                "stddev": statistics.stdev(all_processing_times) if len(all_processing_times) > 1 else 0.0,
+                "count": len(all_processing_times),
             }
         else:
-            thinking_stats = {
+            processing_stats = {
                 "mean": None,
                 "median": None,
                 "min": None,
@@ -428,7 +428,7 @@ class ToolRoundTripTimeBenchmarkAgent(object):
             "iterations_with_tool_calls": len([r for r in detailed_results if r.get("num_tool_calls", 0) > 0]),
             "statistics": {
                 "tool_round_trip_time": tool_stats,
-                "llm_thinking_time": thinking_stats,
+                "processing_time": processing_stats,
                 "llm_execution_time": llm_stats,
             },
             "detailed_results": detailed_results,
@@ -455,13 +455,13 @@ class ToolRoundTripTimeBenchmarkAgent(object):
             print(f"{'  Max TRTT':<30} {tool_stats['max']:.4f} seconds")
             print(f"{'  Std Dev':<30} {tool_stats['stddev']:.4f} seconds")
             
-            if thinking_stats["count"] > 0:
-                print(f"\n{'LLM Thinking Time Statistics:'}")
-                print(f"{'  Mean Thinking Time':<30} {thinking_stats['mean']:.4f} seconds")
-                print(f"{'  Median Thinking Time':<30} {thinking_stats['median']:.4f} seconds")
-                print(f"{'  Min Thinking Time':<30} {thinking_stats['min']:.4f} seconds")
-                print(f"{'  Max Thinking Time':<30} {thinking_stats['max']:.4f} seconds")
-                print(f"{'  Std Dev':<30} {thinking_stats['stddev']:.4f} seconds")
+            if processing_stats["count"] > 0:
+                print(f"\n{'Processing Time Statistics:'}")
+                print(f"{'  Mean Processing Time':<30} {processing_stats['mean']:.4f} seconds")
+                print(f"{'  Median Processing Time':<30} {processing_stats['median']:.4f} seconds")
+                print(f"{'  Min Processing Time':<30} {processing_stats['min']:.4f} seconds")
+                print(f"{'  Max Processing Time':<30} {processing_stats['max']:.4f} seconds")
+                print(f"{'  Std Dev':<30} {processing_stats['stddev']:.4f} seconds")
             
             if llm_stats["count"] > 0:
                 print(f"\n{'LLM Execution Time Statistics:'}")
