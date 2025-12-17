@@ -84,6 +84,7 @@ class VLLMMetricsCollector:
         vllm_metrics_url: Optional[str] = None,
         idle_timeout: int = 60,
         idle_poll_interval: float = 0.5,
+        context_window_size: Optional[int] = None,
     ):
         """
         Initialize the metrics collector.
@@ -93,6 +94,7 @@ class VLLMMetricsCollector:
             vllm_metrics_url: URL of vLLM metrics endpoint (default: http://localhost:8000/metrics)
             idle_timeout: Max seconds to wait for vLLM to become idle
             idle_poll_interval: Seconds between idle state checks
+            context_window_size: Context window size in tokens (default: from VLLM_CONTEXT_WINDOW env var or 32768)
         """
         self.prometheus_url = prometheus_url or os.getenv("VLLM_PROMETHEUS_URL")
         if not self.prometheus_url:
@@ -109,6 +111,12 @@ class VLLMMetricsCollector:
 
         self.idle_timeout = idle_timeout
         self.idle_poll_interval = idle_poll_interval
+
+        # Context window size for reliability metrics
+        self.context_window_size = context_window_size
+        if self.context_window_size is None:
+            env_value = os.getenv("VLLM_CONTEXT_WINDOW")
+            self.context_window_size = int(env_value) if env_value else 32768
 
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
@@ -240,6 +248,20 @@ class VLLMMetricsCollector:
                 print(f"[WARN] Failed to query metric '{metric_name}': {e}")
                 metrics[metric_name] = None
 
+        # === Reliability Metrics ===
+        # Context Window Utilization: percentage of context window used
+        prompt_tokens = metrics.get("prompt_tokens")
+        generation_tokens = metrics.get("generation_tokens")
+        if prompt_tokens is not None and generation_tokens is not None:
+            total_tokens = prompt_tokens + generation_tokens
+            if self.context_window_size > 0:
+                context_window_utilization = (total_tokens / self.context_window_size) * 100
+                metrics["context_window_utilization_perc"] = round(context_window_utilization, 4)
+            else:
+                metrics["context_window_utilization_perc"] = None
+        else:
+            metrics["context_window_utilization_perc"] = None
+
         return metrics
 
     def _prometheus_query(self, query: str, time: datetime) -> Optional[float]:
@@ -318,6 +340,7 @@ def collect_vllm_metrics(
     output_dir: str,
     prometheus_url: Optional[str] = None,
     vllm_metrics_url: Optional[str] = None,
+    context_window_size: Optional[int] = None,
 ):
     """
     Context manager for collecting vLLM metrics around a test case.
@@ -334,6 +357,7 @@ def collect_vllm_metrics(
         output_dir: Directory to save metrics JSON
         prometheus_url: Optional Prometheus server URL
         vllm_metrics_url: Optional vLLM metrics endpoint URL
+        context_window_size: Optional context window size in tokens
 
     Yields:
         VLLMMetricsCollector instance or None if not enabled
@@ -346,6 +370,7 @@ def collect_vllm_metrics(
                     self.collector = VLLMMetricsCollector(
                         prometheus_url=prometheus_url,
                         vllm_metrics_url=vllm_metrics_url,
+                        context_window_size=context_window_size,
                     )
                 except Exception as e:
                     print(f"[WARN] Failed to initialize vLLM metrics collector: {e}")
