@@ -30,7 +30,7 @@ except ImportError:
     except ImportError:
         from langchain.callbacks import BaseCallbackHandler
 
-from ciso_agent.llm import init_llm, get_llm_params
+from ciso_agent.streaming_llm import init_llm, get_llm_params
 
 load_dotenv()
 
@@ -215,8 +215,6 @@ class TokenGenerationSpeedBenchmarkAgent(object):
         for iteration in range(1, num_iterations + 1):
             print(f"Running iteration {iteration}/{num_iterations}...", end=" ", flush=True)
             
-            callback = TokenGenerationSpeedCallback()
-            
             try:
                 # Prepare messages
                 messages = [HumanMessage(content=prompt)]
@@ -224,22 +222,44 @@ class TokenGenerationSpeedBenchmarkAgent(object):
                 # Make streaming call
                 start_time = time.time()
                 try:
-                    response = llm.stream(messages, callbacks=[callback])
+                    # Don't pass callbacks to stream() - manually track timing instead
+                    response = llm.stream(messages)
                     
-                    # Consume the stream to trigger callbacks
+                    # Consume the stream and track timing
                     full_response = ""
+                    first_chunk_time = None
+                    last_chunk_time = None
+                    token_count = 0
                     for chunk in response:
+                        current_time = time.time()
+                        if first_chunk_time is None:
+                            first_chunk_time = current_time
+                        last_chunk_time = current_time
                         if hasattr(chunk, 'content') and chunk.content:
                             full_response += chunk.content
+                            # Estimate tokens (rough approximation: ~4 chars per token)
+                            token_count += len(chunk.content) // 4
                     
                     end_time = time.time()
                     total_time = end_time - start_time
-                    tokens_per_second = callback.get_token_generation_speed()
-                    total_tokens = callback.get_total_tokens()
+                    
+                    # Calculate token generation speed
+                    if first_chunk_time is not None and last_chunk_time is not None and token_count > 1:
+                        # Time from first token to last token
+                        generation_time = last_chunk_time - first_chunk_time
+                        if generation_time > 0:
+                            # Tokens generated after the first one
+                            tokens_generated = token_count - 1
+                            tokens_per_second = tokens_generated / generation_time
+                        else:
+                            tokens_per_second = None
+                    else:
+                        tokens_per_second = None
+                    total_tokens = token_count
                 
                 except (AttributeError, TypeError) as e:
                     # Streaming not supported, fall back to non-streaming
-                    print(f"  (Streaming not supported, using fallback method)", end=" ", flush=True)
+                    print(f"  (Streaming not supported: {type(e).__name__}: {str(e)}, using fallback method)", end=" ", flush=True)
                     response = llm.invoke(messages)
                     end_time = time.time()
                     total_time = end_time - start_time

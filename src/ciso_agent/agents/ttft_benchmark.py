@@ -30,7 +30,7 @@ except ImportError:
     except ImportError:
         from langchain.callbacks import BaseCallbackHandler
 
-from ciso_agent.llm import init_llm, get_llm_params
+from ciso_agent.streaming_llm import init_llm, get_llm_params
 
 load_dotenv()
 
@@ -177,8 +177,6 @@ class TTFTBenchmarkAgent(object):
         for iteration in range(1, num_iterations + 1):
             print(f"Running iteration {iteration}/{num_iterations}...", end=" ", flush=True)
             
-            callback = FirstTokenCallback()
-            
             try:
                 # Prepare messages
                 messages = [HumanMessage(content=prompt)]
@@ -186,28 +184,33 @@ class TTFTBenchmarkAgent(object):
                 # Make streaming call
                 start_time = time.time()
                 try:
-                    response = llm.stream(messages, callbacks=[callback])
+                    # Don't pass callbacks to stream() - manually track timing instead
+                    response = llm.stream(messages)
                     
-                    # Consume the stream to trigger callbacks
+                    # Consume the stream and track first token time
                     full_response = ""
                     first_chunk_time = None
+                    token_count = 0
                     for chunk in response:
                         if first_chunk_time is None:
+                            # This is the first chunk - record the time
                             first_chunk_time = time.time()
                         if hasattr(chunk, 'content') and chunk.content:
                             full_response += chunk.content
+                            # Estimate tokens (rough approximation: ~4 chars per token)
+                            token_count += len(chunk.content) // 4
                     
                     end_time = time.time()
                     total_time = end_time - start_time
-                    ttft = callback.get_ttft()
-                    
-                    # Fallback: if callback didn't capture TTFT, use first chunk time
-                    if ttft is None and first_chunk_time is not None:
+                    # TTFT is the time from start to first chunk
+                    if first_chunk_time is not None:
                         ttft = first_chunk_time - start_time
+                    else:
+                        ttft = None
                 
                 except (AttributeError, TypeError) as e:
                     # Streaming not supported, fall back to non-streaming with timing
-                    print(f"  (Streaming not supported, using fallback method)", end=" ", flush=True)
+                    print(f"  (Streaming not supported: {type(e).__name__}: {str(e)}, using fallback method)", end=" ", flush=True)
                     response = llm.invoke(messages)
                     end_time = time.time()
                     total_time = end_time - start_time
@@ -215,6 +218,8 @@ class TTFTBenchmarkAgent(object):
                     # This is not ideal but provides some measurement
                     ttft = total_time
                     full_response = response.content if hasattr(response, 'content') else str(response)
+                    # Estimate token count for fallback
+                    token_count = len(full_response) // 4
                 
                 if ttft is not None:
                     ttft_values.append(ttft)
@@ -222,7 +227,7 @@ class TTFTBenchmarkAgent(object):
                         "iteration": iteration,
                         "ttft_seconds": ttft,
                         "total_time_seconds": total_time,
-                        "tokens_generated": callback.token_count,
+                        "tokens_generated": token_count,
                         "timestamp": datetime.now().isoformat(),
                     })
                     print(f"✓ TTFT: {ttft:.4f}s")
