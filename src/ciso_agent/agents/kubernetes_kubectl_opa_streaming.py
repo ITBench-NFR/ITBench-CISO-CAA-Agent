@@ -16,25 +16,24 @@ import argparse
 import datetime
 import json
 import os
-import shutil   
-import sys
+import shutil
+import string
 import time
-from dotenv import load_dotenv
 
 from crewai import Agent, Crew, Process, Task
+from dotenv import load_dotenv
 from langfuse import get_client
-
-from ciso_agent.tracing import extract_metrics_from_trace
 from openinference.instrumentation.crewai import CrewAIInstrumentor
 from openinference.instrumentation.langchain import LangChainInstrumentor
 from openinference.instrumentation.litellm import LiteLLMInstrumentor
 
-from ciso_agent.streaming_llm import init_streaming_llm, get_llm_params
+from ciso_agent.tracing import extract_metrics_from_trace
+from ciso_agent.streaming_llm import get_llm_params
 from ciso_agent.streaming_utils import StreamingMetricsCallback, StreamingLLMWrapper
 from ciso_agent.llm import extract_code
-from ciso_agent.tools.generate_kyverno import GenerateKyvernoTool
+from ciso_agent.tools.generate_opa_rego import GenerateOPARegoTool
+from ciso_agent.tools.run_opa_rego import RunOPARegoTool
 from ciso_agent.tools.run_kubectl import RunKubectlTool
-from ciso_agent.tracing import extract_metrics_from_trace
 from ciso_agent.vllm_metrics import VLLMMetricsCollector, is_vllm_metrics_enabled
 
 # Load .env file - check Docker mount path first, then current directory
@@ -43,43 +42,41 @@ if os.path.exists(docker_env_path):
     load_dotenv(docker_env_path)
 else:
     load_dotenv()
+
 langfuse = get_client()
 
 
-class KubernetesKyvernoUpdateCrew(object):
-    agent_goal: str = """Currently, the following Kyverno policies are deployed in the Kubernetes cluster.
-Review these existing policies and edit them to meet additional security requirements.
-Please avoid creating new policy resources; instead, make the necessary changes directly to the existing resources.
+class KubernetesKubectlOPACrew(object):
+    agent_goal: str = """I would like to check if the following condition is satisfiled, given a Kubernetes cluster with `kubeconfig.yaml`
+    ${compliance}
 
-${current_compliance}
+To check the condition, do the following steps.
+- get related resource(s) on the cluster by kubectl command and save it as `collected_data.json`
+- chcek if the conditions are satisfied by OPA Rego policy
 
-However, the new internal security policy now requires the following additional conditions:
+for those steps, you need to create an OPA Rego policy `policy.rego`.
+Also, save the kubectl command as `script.sh`.
 
-${updated_compliance}
-
-Your task is to review the existing Kyverno policies and directly edit the existing policies to meet these new requirements.
-Do not change the resource names. Once you have completed the edits, update the existing resources in the Kubernetes cluster.
-Steps
-- Get Kyverno policies and review them.
-- Generate an updated Kyverno policy to meet the new requirements based on the current one. Ensure that you do not change the names of the resources.
-- Apply the updated one to the cluster.
+If running the policy failed and if you can fix the issue, you will do it and try running again.
 
 Once you get a final answer, you can quit the work.
 """
+
     tool_description: str = """This agent has the following tools to use:
+- RunOPARegoTool
+- GenerateOPARegoTool
 - RunKubectlTool
-- GenerateKyvernoTool
 """
 
     input_description: dict = {
-        "current_compliance": "a short string of current compliance requirement",
-        "updated_compliance": "a short string of updated compliance requirement in addition to the current one",
+        "compliance": "a short string of compliance requirement",
         "workdir": "a working directory to save temporary files",
     }
 
     output_description: dict = {
-        "updated_resource": "a dict of Kubernetes metadata for the updated Kyverno policy",
-        "path_to_generated_kyverno_policy": "a string of the filepath to the generated Kyverno policy YAML",
+        "path_to_generated_shell_script": "a string of the filepath to the generated shell script",
+        "path_to_generated_rego_policy": "a string of the filepath to the generated rego policy",
+        "path_to_collected_data_by_script": "a string of the filepath to the collected data",
         "streaming_metrics": "a dict containing TTFT and TGS statistics from streaming LLM calls",
         "path_to_streaming_metrics": "a string of the filepath to the streaming metrics JSON file",
     }
@@ -88,7 +85,7 @@ Once you get a final answer, you can quit the work.
 
     def kickoff(self, inputs: dict):
         print("\n" + "="*80)
-        print("KUBERNETES_KYVERNO_UPDATE_STREAMING AGENT - STREAMING METRICS ENABLED")
+        print("KUBERNETES_KUBECTL_OPA_STREAMING AGENT - STREAMING METRICS ENABLED")
         print("="*80 + "\n")
         CrewAIInstrumentor().instrument(skip_dep_check=True)
         LangChainInstrumentor().instrument(skip_dep_check=True)
@@ -99,7 +96,7 @@ Once you get a final answer, you can quit the work.
         metrics_collector = None
         
         if is_vllm_metrics_enabled():
-            test_case_id = f"kyverno_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            test_case_id = f"kubectl_opa_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
             try:
                 metrics_collector = VLLMMetricsCollector()
                 metrics_collector.start_collection(test_case_id)
@@ -244,7 +241,7 @@ Once you get a final answer, you can quit the work.
 
     def run_scenario(self, goal: str, **kwargs):
         print("\n" + "="*80)
-        print("KUBERNETES_KYVERNO_UPDATE_STREAMING.run_scenario() CALLED")
+        print("KUBERNETES_KUBECTL_OPA_STREAMING.run_scenario() CALLED")
         print(f"Goal: {goal[:100]}...")
         print("="*80 + "\n")
         workdir = kwargs.get("workdir")
@@ -272,11 +269,11 @@ Once you get a final answer, you can quit the work.
         print(f"[DEBUG] Log path will be: {log_path}")
         print(f"[DEBUG] Workdir: {workdir}")
         print(f"[DEBUG] Workdir exists: {os.path.exists(workdir)}")
-        print(f"[DEBUG] This is kubernetes_kyverno_update_streaming agent - streaming metrics collection enabled")
+        print(f"[DEBUG] This is kubernetes_kubectl_opa_streaming agent - streaming metrics collection enabled")
         try:
             # Ensure directory exists
             os.makedirs(workdir, exist_ok=True)
-            log_data = {"sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "kubernetes_kyverno_update_streaming.py:537", "message": "About to initialize streaming LLM", "data": {"model": model, "api_url": api_url, "has_api_key": bool(api_key), "workdir": workdir}, "timestamp": int(time.time() * 1000)}
+            log_data = {"sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "kubernetes_kubectl_opa_streaming.py:337", "message": "About to initialize streaming LLM", "data": {"model": model, "api_url": api_url, "has_api_key": bool(api_key), "workdir": workdir}, "timestamp": int(time.time() * 1000)}
             try:
                 with open(log_path, "a") as f:
                     f.write(json.dumps(log_data) + "\n")
@@ -334,7 +331,7 @@ Once you get a final answer, you can quit the work.
         # #region agent log
         try:
             with open(log_path, "a") as f:
-                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "kubernetes_kyverno_update_streaming.py:565", "message": "CrewAI LLM initialized", "data": {"llm_type": type(crewai_llm).__name__, "llm_module": type(crewai_llm).__module__}, "timestamp": int(time.time() * 1000)}) + "\n")
+                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "kubernetes_kubectl_opa_streaming.py:365", "message": "CrewAI LLM initialized", "data": {"llm_type": type(crewai_llm).__name__, "llm_module": type(crewai_llm).__module__}, "timestamp": int(time.time() * 1000)}) + "\n")
         except Exception as e:
             print(f"[DEBUG] Failed to write log: {e}")
         # #endregion
@@ -354,7 +351,7 @@ Once you get a final answer, you can quit the work.
                 # #region agent log
                 try:
                     with open(log_path, "a") as f:
-                        f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:597", "message": "litellm.completion() called", "data": {"stream_param": kwargs.get("stream", False), "model": kwargs.get("model"), "args_count": len(args)}, "timestamp": int(time.time() * 1000)}) + "\n")
+                        f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kubectl_opa_streaming.py:397", "message": "litellm.completion() called", "data": {"stream_param": kwargs.get("stream", False), "model": kwargs.get("model"), "args_count": len(args)}, "timestamp": int(time.time() * 1000)}) + "\n")
                 except Exception as e:
                     print(f"[DEBUG] Failed to log litellm.completion call: {e}")
                 # #endregion
@@ -390,7 +387,7 @@ Once you get a final answer, you can quit the work.
                 print(f"[DEBUG] Starting to consume stream for metrics tracking")
                 try:
                     with open(log_path, "a") as f:
-                        f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:632", "message": "Starting to consume stream", "data": {}, "timestamp": int(time.time() * 1000)}) + "\n")
+                        f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kubectl_opa_streaming.py:432", "message": "Starting to consume stream", "data": {}, "timestamp": int(time.time() * 1000)}) + "\n")
                 except Exception:
                     pass
                 
@@ -412,7 +409,7 @@ Once you get a final answer, you can quit the work.
                         # #region agent log
                         try:
                             with open(log_path, "a") as f:
-                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "kubernetes_kyverno_update_streaming.py:670", "message": "Chunk structure inspection", "data": {"chunk_num": token_count, "chunk_attrs": chunk_attrs[:10], "chunk_dict": chunk_dict}, "timestamp": int(time.time() * 1000)}) + "\n")
+                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "kubernetes_kubectl_opa_streaming.py:470", "message": "Chunk structure inspection", "data": {"chunk_num": token_count, "chunk_attrs": chunk_attrs[:10], "chunk_dict": chunk_dict}, "timestamp": int(time.time() * 1000)}) + "\n")
                         except Exception:
                             pass
                         # #endregion
@@ -425,7 +422,7 @@ Once you get a final answer, you can quit the work.
                         # #region agent log
                         try:
                             with open(log_path, "a") as f:
-                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:690", "message": "First token received via litellm stream", "data": {"ttft": ttft, "token_count": token_count}, "timestamp": int(time.time() * 1000)}) + "\n")
+                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kubectl_opa_streaming.py:490", "message": "First token received via litellm stream", "data": {"ttft": ttft, "token_count": token_count}, "timestamp": int(time.time() * 1000)}) + "\n")
                         except Exception:
                             pass
                         # #endregion
@@ -468,7 +465,7 @@ Once you get a final answer, you can quit the work.
                             # #region agent log
                             try:
                                 with open(log_path, "a") as f:
-                                    f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "kubernetes_kyverno_update_streaming.py:730", "message": "Content extraction error", "data": {"error": str(e), "chunk_type": str(type(chunk))}, "timestamp": int(time.time() * 1000)}) + "\n")
+                                    f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "kubernetes_kubectl_opa_streaming.py:530", "message": "Content extraction error", "data": {"error": str(e), "chunk_type": str(type(chunk))}, "timestamp": int(time.time() * 1000)}) + "\n")
                             except Exception:
                                 pass
                             # #endregion
@@ -483,7 +480,7 @@ Once you get a final answer, you can quit the work.
                         # #region agent log
                         try:
                             with open(log_path, "a") as f:
-                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:675", "message": "TGS calculated via litellm stream", "data": {"tokens_per_second": tokens_per_second, "token_count": token_count}, "timestamp": int(time.time() * 1000)}) + "\n")
+                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kubectl_opa_streaming.py:575", "message": "TGS calculated via litellm stream", "data": {"tokens_per_second": tokens_per_second, "token_count": token_count}, "timestamp": int(time.time() * 1000)}) + "\n")
                         except Exception:
                             pass
                         # #endregion
@@ -524,7 +521,7 @@ Once you get a final answer, you can quit the work.
             # #region agent log
             try:
                 with open(log_path, "a") as f:
-                    f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:675", "message": "Patched litellm.completion to enable streaming", "data": {"patch_applied": litellm.completion == patched_completion}, "timestamp": int(time.time() * 1000)}) + "\n")
+                    f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kubectl_opa_streaming.py:575", "message": "Patched litellm.completion to enable streaming", "data": {"patch_applied": litellm.completion == patched_completion}, "timestamp": int(time.time() * 1000)}) + "\n")
             except Exception as e:
                 print(f"[DEBUG] Failed to log patch confirmation: {e}")
             # #endregion
@@ -542,11 +539,10 @@ Once you get a final answer, you can quit the work.
         # #region agent log
         try:
             with open(log_path, "a") as f:
-                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:680", "message": "Using CrewAI LLM wrapper with LiteLLM patching", "data": {"llm_type": type(llm).__name__}, "timestamp": int(time.time() * 1000)}) + "\n")
+                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kubectl_opa_streaming.py:680", "message": "Using CrewAI LLM wrapper with LiteLLM patching", "data": {"llm_type": type(llm).__name__}, "timestamp": int(time.time() * 1000)}) + "\n")
         except Exception:
             pass
         # #endregion
-            """Wrapper around LangChain LLM that tracks streaming metrics."""
         
         test_agent = Agent(
             role="Test",
@@ -559,39 +555,36 @@ Once you get a final answer, you can quit the work.
         
         # #region agent log
         with open(log_path, "a") as f:
-            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "kubernetes_kyverno_update_streaming.py:648", "message": "Agent created", "data": {"agent_llm_type": type(test_agent.llm).__name__ if hasattr(test_agent, 'llm') else None, "agent_llm_module": type(test_agent.llm).__module__ if hasattr(test_agent, 'llm') else None, "agent_llm_is_same": test_agent.llm is llm if hasattr(test_agent, 'llm') else None, "has_callbacks": hasattr(test_agent, 'callbacks'), "callback_count": len(test_agent.callbacks) if hasattr(test_agent, 'callbacks') else 0}, "timestamp": int(time.time() * 1000)}) + "\n")
+            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "kubernetes_kubectl_opa_streaming.py:648", "message": "Agent created", "data": {"agent_llm_type": type(test_agent.llm).__name__ if hasattr(test_agent, 'llm') else None, "agent_llm_module": type(test_agent.llm).__module__ if hasattr(test_agent, 'llm') else None, "agent_llm_is_same": test_agent.llm is llm if hasattr(test_agent, 'llm') else None, "has_callbacks": hasattr(test_agent, 'callbacks'), "callback_count": len(test_agent.callbacks) if hasattr(test_agent, 'callbacks') else 0}, "timestamp": int(time.time() * 1000)}) + "\n")
         # #endregion
         
         print(f"[DEBUG] Agent created with callbacks: {len(test_agent.callbacks) if hasattr(test_agent, 'callbacks') else 'N/A'}")
 
         target_task = Task(
             name="target_task",
-            description="""Get the Kyverno policy and generate the updated one based on it. Then deploy it on the cluster.""",
-            expected_output="""A boolean which indicates if the result is OK or not""",
+            description="""Check a rego policy for a given input file. If policy or input file are not ready, prepare them first.""",
+            expected_output="""A boolean which indicates if the check is passed or not""",
             agent=test_agent,
             tools=[
-                RunKubectlTool(workdir=workdir, read_only=False),
-                GenerateKyvernoTool(workdir=workdir),
+                RunOPARegoTool(workdir=workdir),
+                GenerateOPARegoTool(workdir=workdir),
+                RunKubectlTool(workdir=workdir, read_only=True),
             ],
         )
         report_task = Task(
             name="report_task",
-            description="""Report a filepath that was created in the previous task.
+            description="""Report filepaths that are created in the previous task.
 You must not replay the steps in the privious task such as generating code / running something.
 Just to report the result.
 """,
             expected_output="""A JSON string with the following info:
 ```json
 {
-    "updated_resource": {
-        "namespace": <PLACEHOLDER>,
-        "kind": <PLACEHOLDER>,
-        "name": <PLACEHOLDER>
-    },
-    "path_to_generated_kyverno_policy": <PLACEHOLDER>,
+    "path_to_generated_shell_script": <PLACEHOLDER>,
+    "path_to_generated_rego_policy": <PLACEHOLDER>,
+    "path_to_collected_data_by_script": <PLACEHOLDER>,
 }
 ```
-You can omit `namespace` in `updated_resource` if the policy is a cluster-scope resource.
 """,
             context=[target_task],
             agent=test_agent,
@@ -614,36 +607,32 @@ You can omit `namespace` in `updated_resource` if the policy is a cluster-scope 
         
         # #region agent log
         with open(log_path, "a") as f:
-            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "kubernetes_kyverno_update_streaming.py:698", "message": "About to call crew.kickoff", "data": {"crew_agents_count": len(crew.agents) if hasattr(crew, 'agents') else 0, "crew_tasks_count": len(crew.tasks) if hasattr(crew, 'tasks') else 0}, "timestamp": int(time.time() * 1000)}) + "\n")
+            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "kubernetes_kubectl_opa_streaming.py:698", "message": "About to call crew.kickoff", "data": {"crew_agents_count": len(crew.agents) if hasattr(crew, 'agents') else 0, "crew_tasks_count": len(crew.tasks) if hasattr(crew, 'tasks') else 0}, "timestamp": int(time.time() * 1000)}) + "\n")
         # #endregion
         
         output = crew.kickoff(inputs=inputs)
         
         # #region agent log
         with open(log_path, "a") as f:
-            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:702", "message": "crew.kickoff completed", "data": {"ttft_count": len(streaming_metrics_callback.all_ttft_values), "tgs_count": len(streaming_metrics_callback.all_tgs_values)}, "timestamp": int(time.time() * 1000)}) + "\n")
+            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kubectl_opa_streaming.py:702", "message": "crew.kickoff completed", "data": {"ttft_count": len(streaming_metrics_callback.all_ttft_values), "tgs_count": len(streaming_metrics_callback.all_tgs_values)}, "timestamp": int(time.time() * 1000)}) + "\n")
         # #endregion
-        result_str = output.raw.strip()
-        if not result_str:
-            raise ValueError("crew agent returned an empty string.")
-
+        result_str = output.raw
         if "```" in result_str:
             result_str = extract_code(result_str, code_type="json")
-        result_str = result_str.strip()
 
-        if not result_str:
-            raise ValueError(f"crew agent returned an invalid string. This is the actual output: {output.raw}")
-
-        result = {}
+        result = None
         try:
             result = json.loads(result_str)
         except Exception:
-            print(f"Failed to parse this as JSON: {result_str}", file=sys.stderr)
+            raise ValueError(f"Failed to parse this as JSON: {result_str}")
 
         # add workdir prefix here because agent does not know it
         for key, val in result.items():
             if val and key.startswith("path_to_") and "/" not in val:
                 result[key] = os.path.join(workdir, val)
+
+        # for eval, copy the generated files to some fixed filepath (filename)
+        copy_files_for_eval(result)
 
         # Collect streaming metrics
         ttft_stats = streaming_metrics_callback.get_ttft_stats()
@@ -701,13 +690,28 @@ You can omit `namespace` in `updated_resource` if the policy is a cluster-scope 
         return {"result": result}, streaming_metrics_callback
 
 
+def copy_files_for_eval(result: dict):
+    script_path = result.get("path_to_generated_shell_script")
+    if script_path and os.path.exists(script_path) and os.path.basename(script_path) != "fetcher.sh":
+        dest_path = os.path.join(os.path.dirname(script_path), "fetcher.sh")
+        shutil.copyfile(script_path, dest_path)
+
+    policy_path = result.get("path_to_generated_rego_policy")
+    if policy_path and os.path.exists(policy_path) and os.path.basename(policy_path) != "policy.rego":
+        dest_path = os.path.join(os.path.dirname(policy_path), "policy.rego")
+        shutil.copyfile(policy_path, dest_path)
+
+    data_path = result.get("path_to_collected_data_by_script")
+    if data_path and os.path.exists(data_path) and os.path.basename(data_path) != "collected_data.json":
+        dest_path = os.path.join(os.path.dirname(data_path), "collected_data.json")
+        shutil.copyfile(data_path, dest_path)
+    return
+
+
 if __name__ == "__main__":
     default_compliance = "Ensure that the cluster-admin role is only used where required"
     parser = argparse.ArgumentParser(description="TODO")
-    parser.add_argument("-c", "--current-compliance", default=default_compliance, help="The compliance description for the agent to do something for")
-    parser.add_argument(
-        "-u", "--updated-compliance", default=default_compliance, help="The additional compliance description for the agent to do something for"
-    )
+    parser.add_argument("-c", "--compliance", default=default_compliance, help="The compliance description for the agent to do something for")
     parser.add_argument("-k", "--kubeconfig", required=True, help="The path to the kubeconfig file")
     parser.add_argument("-w", "--workdir", default="", help="The path to the work dir which the agent will use")
     parser.add_argument("-o", "--output", help="The path to the output JSON file")
@@ -721,11 +725,10 @@ if __name__ == "__main__":
         shutil.copyfile(args.kubeconfig, dest_path)
 
     inputs = dict(
-        current_compliance=args.current_compliance,
-        updated_compliance=args.updated_compliance,
+        compliance=args.compliance,
         workdir=args.workdir,
     )
-    _result = KubernetesKyvernoUpdateCrew().kickoff(inputs=inputs)
+    _result = KubernetesKubectlOPACrew().kickoff(inputs=inputs)
     result = _result.get("result")
 
     result_json_str = json.dumps(result, indent=2)
@@ -737,3 +740,4 @@ if __name__ == "__main__":
     if args.output:
         with open(args.output, "w") as f:
             f.write(result_json_str)
+
