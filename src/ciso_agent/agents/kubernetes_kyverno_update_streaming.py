@@ -368,6 +368,10 @@ Once you get a final answer, you can quit the work.
                 kwargs["stream"] = True
                 print(f"[DEBUG] Forced stream=True (was {original_stream_param})")
                 
+                # Track metrics from the stream and accumulate response
+                # Set request_start BEFORE the API call to properly measure TTFT including network latency
+                request_start = time.time()
+                
                 # Call original completion with streaming enabled
                 try:
                     response_stream = original_completion(*args, **kwargs)
@@ -377,9 +381,6 @@ Once you get a final answer, you can quit the work.
                     import traceback
                     traceback.print_exc()
                     raise
-                
-                # Track metrics from the stream and accumulate response
-                request_start = time.time()
                 first_token_time = None
                 last_token_time = None
                 token_count = 0
