@@ -75,6 +75,10 @@ class StreamingMetricsCallback(BaseCallbackHandler):
     
     def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any) -> None:
         """Called when the LLM starts running."""
+        # #region agent log
+        import json
+        # Note: log_path is not available in callback context, skip logging here
+        # #endregion
         self.callback_invocations["on_llm_start"] += 1
         if self.debug:
             print(f"[DEBUG] StreamingMetricsCallback.on_llm_start called (count: {self.callback_invocations['on_llm_start']})")
@@ -87,6 +91,10 @@ class StreamingMetricsCallback(BaseCallbackHandler):
     
     def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
         """Called when a new token is generated."""
+        # #region agent log
+        import json
+        # Note: log_path is not available in callback context, skip logging here
+        # #endregion
         self.callback_invocations["on_llm_new_token"] += 1
         current_time = time.time()
         
@@ -96,6 +104,9 @@ class StreamingMetricsCallback(BaseCallbackHandler):
             if self.current_request_start_time is not None:
                 ttft = current_time - self.current_request_start_time
                 self.all_ttft_values.append(ttft)
+                # #region agent log
+                # Note: log_path not available in callback context
+                # #endregion
                 if self.debug:
                     print(f"[DEBUG] First token received! TTFT: {ttft:.4f}s")
             self.current_tokens_received = True
@@ -109,6 +120,10 @@ class StreamingMetricsCallback(BaseCallbackHandler):
     
     def on_llm_end(self, response, **kwargs: Any) -> None:
         """Called when the LLM finishes running."""
+        # #region agent log
+        import json
+        # Note: log_path is not available in callback context, skip logging here
+        # #endregion
         self.callback_invocations["on_llm_end"] += 1
         if self.debug:
             print(f"[DEBUG] StreamingMetricsCallback.on_llm_end called (count: {self.callback_invocations['on_llm_end']}, tokens: {self.current_token_count})")
@@ -124,6 +139,9 @@ class StreamingMetricsCallback(BaseCallbackHandler):
                 tokens_generated = self.current_token_count - 1
                 tokens_per_second = tokens_generated / generation_time
                 self.all_tgs_values.append(tokens_per_second)
+                # #region agent log
+                # Note: log_path not available in callback context
+                # #endregion
                 if self.debug:
                     print(f"[DEBUG] TGS calculated: {tokens_per_second:.2f} tokens/sec ({tokens_generated} tokens in {generation_time:.4f}s)")
     
@@ -342,6 +360,9 @@ Once you get a final answer, you can quit the work.
     workdir_root: str = "/tmp/agent/"
 
     def kickoff(self, inputs: dict):
+        print("\n" + "="*80)
+        print("KUBERNETES_KYVERNO_UPDATE_STREAMING AGENT - STREAMING METRICS ENABLED")
+        print("="*80 + "\n")
         CrewAIInstrumentor().instrument(skip_dep_check=True)
         LangChainInstrumentor().instrument(skip_dep_check=True)
         LiteLLMInstrumentor().instrument(skip_dep_check=True)
@@ -495,6 +516,10 @@ Once you get a final answer, you can quit the work.
             metrics_callback.all_tgs_values.extend(tgs_values)
 
     def run_scenario(self, goal: str, **kwargs):
+        print("\n" + "="*80)
+        print("KUBERNETES_KYVERNO_UPDATE_STREAMING.run_scenario() CALLED")
+        print(f"Goal: {goal[:100]}...")
+        print("="*80 + "\n")
         workdir = kwargs.get("workdir")
         if not workdir:
             workdir = os.path.join(self.workdir_root, datetime.datetime.now(datetime.UTC).strftime("%Y%m%d%H%M%S_"), "workspace")
@@ -511,6 +536,43 @@ Once you get a final answer, you can quit the work.
         # Initialize streaming LLM
         model, api_url, api_key = get_llm_params()
         
+        # #region agent log
+        import json
+        # Use workdir for debug logs so they're accessible in Docker
+        # Also try a fallback location in case workdir isn't accessible
+        log_path = os.path.join(workdir, "debug.log")
+        fallback_log_path = "/tmp/agent/debug.log"  # Fallback for Docker
+        print(f"[DEBUG] Log path will be: {log_path}")
+        print(f"[DEBUG] Workdir: {workdir}")
+        print(f"[DEBUG] Workdir exists: {os.path.exists(workdir)}")
+        print(f"[DEBUG] This is kubernetes_kyverno_update_streaming agent - streaming metrics collection enabled")
+        try:
+            # Ensure directory exists
+            os.makedirs(workdir, exist_ok=True)
+            log_data = {"sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "kubernetes_kyverno_update_streaming.py:537", "message": "About to initialize streaming LLM", "data": {"model": model, "api_url": api_url, "has_api_key": bool(api_key), "workdir": workdir}, "timestamp": int(time.time() * 1000)}
+            try:
+                with open(log_path, "a") as f:
+                    f.write(json.dumps(log_data) + "\n")
+                print(f"[DEBUG] Successfully wrote to log: {log_path}")
+            except Exception as e1:
+                print(f"[DEBUG] Failed to write to primary log path: {e1}")
+                # Try fallback
+                try:
+                    os.makedirs(os.path.dirname(fallback_log_path), exist_ok=True)
+                    with open(fallback_log_path, "a") as f:
+                        f.write(json.dumps(log_data) + "\n")
+                    print(f"[DEBUG] Wrote to fallback log: {fallback_log_path}")
+                    log_path = fallback_log_path  # Update log_path for rest of function
+                except Exception as e2:
+                    print(f"[DEBUG] Failed to write to fallback log: {e2}")
+                    import traceback
+                    traceback.print_exc()
+        except Exception as e:
+            print(f"[DEBUG] Failed to write log: {e}")
+            import traceback
+            traceback.print_exc()
+        # #endregion
+        
         # CrewAI/LiteLLM requires OPENAI_API_KEY environment variable when using ChatOpenAI
         # Set it if api_key is available and OPENAI_API_KEY is not already set
         if api_key and not os.getenv("OPENAI_API_KEY"):
@@ -519,123 +581,198 @@ Once you get a final answer, you can quit the work.
         # Create callback handler for tracking streaming metrics
         streaming_metrics_callback = StreamingMetricsCallback(debug=True)
         
-        llm = init_streaming_llm(model=model, api_url=api_url, api_key=api_key)
+        # Use CrewAI's LLM wrapper (like init_agent_llm does) but intercept LiteLLM calls
+        # CrewAI wraps LangChain models in its own LLM class which uses LiteLLM
+        # We need to intercept at the LiteLLM level to enable streaming
+        from crewai import LLM
         
-        print(f"[DEBUG] Initialized LLM: {type(llm).__name__}")
-        print(f"[DEBUG] LLM streaming attribute: {getattr(llm, 'streaming', 'N/A')}")
+        temperature = float(os.getenv("LLM_TEMPERATURE", "0.0"))
         
-        # Monkey-patch the LLM's stream and invoke methods to track metrics
-        # This ensures we intercept calls even if CrewAI/LiteLLM wraps the LLM
-        original_stream = llm.stream
-        original_invoke = llm.invoke
+        # Create CrewAI LLM wrapper - this is what CrewAI expects
+        if "qwen" in model.lower():
+            crewai_llm = LLM(
+                model="hosted_vllm/" + model,
+                base_url=api_url,
+                api_key=api_key,
+                temperature=temperature,
+            )
+        else:
+            crewai_llm = LLM(
+                model=model,
+                base_url=api_url,
+                api_key=api_key,
+                temperature=temperature,
+            )
         
-        def patched_stream(input, config=None, **kwargs):
-            """Patched stream method that tracks metrics."""
-            if streaming_metrics_callback.debug:
-                print(f"[DEBUG] Patched stream() called on {type(llm).__name__}")
-            request_start = time.time()
-            first_token_time = None
-            last_token_time = None
-            token_count = 0
-            
-            for chunk in original_stream(input, config=config, **kwargs):
-                current_time = time.time()
-                
-                if first_token_time is None:
-                    first_token_time = current_time
-                    ttft = first_token_time - request_start
-                    streaming_metrics_callback.all_ttft_values.append(ttft)
-                    if streaming_metrics_callback.debug:
-                        print(f"[DEBUG] First token received via patched stream! TTFT: {ttft:.4f}s")
-                
-                last_token_time = current_time
-                token_count += 1
-                yield chunk
-            
-            # Calculate TGS after streaming completes
-            if first_token_time and last_token_time and token_count >= 2:
-                generation_time = last_token_time - first_token_time
-                if generation_time > 0:
-                    tokens_generated = token_count - 1
-                    tokens_per_second = tokens_generated / generation_time
-                    streaming_metrics_callback.all_tgs_values.append(tokens_per_second)
-                    if streaming_metrics_callback.debug:
-                        print(f"[DEBUG] TGS calculated via patched stream: {tokens_per_second:.2f} tokens/sec")
-        
-        def patched_invoke(input, config=None, **kwargs):
-            """Patched invoke method that tries to use streaming for metrics."""
-            if streaming_metrics_callback.debug:
-                print(f"[DEBUG] Patched invoke() called on {type(llm).__name__}")
-            
-            # Try to use streaming if available to track metrics
-            if hasattr(llm, 'stream') and original_stream:
-                try:
-                    request_start = time.time()
-                    first_token_time = None
-                    last_token_time = None
-                    token_count = 0
-                    chunks = []
-                    
-                    for chunk in original_stream(input, config=config, **kwargs):
-                        chunks.append(chunk)
-                        current_time = time.time()
-                        
-                        if first_token_time is None:
-                            first_token_time = current_time
-                            ttft = first_token_time - request_start
-                            streaming_metrics_callback.all_ttft_values.append(ttft)
-                            if streaming_metrics_callback.debug:
-                                print(f"[DEBUG] First token received via patched invoke->stream! TTFT: {ttft:.4f}s")
-                        
-                        last_token_time = current_time
-                        token_count += 1
-                    
-                    # Calculate TGS
-                    if first_token_time and last_token_time and token_count >= 2:
-                        generation_time = last_token_time - first_token_time
-                        if generation_time > 0:
-                            tokens_generated = token_count - 1
-                            tokens_per_second = tokens_generated / generation_time
-                            streaming_metrics_callback.all_tgs_values.append(tokens_per_second)
-                            if streaming_metrics_callback.debug:
-                                print(f"[DEBUG] TGS calculated via patched invoke->stream: {tokens_per_second:.2f} tokens/sec")
-                    
-                    # Combine chunks into response
-                    if chunks:
-                        if hasattr(chunks[0], 'content'):
-                            combined_content = ''.join(chunk.content for chunk in chunks if hasattr(chunk, 'content'))
-                            final_chunk = chunks[-1]
-                            if hasattr(final_chunk, 'content'):
-                                final_chunk.content = combined_content
-                            return final_chunk
-                        return chunks[-1] if chunks else None
-                except Exception as e:
-                    if streaming_metrics_callback.debug:
-                        print(f"[DEBUG] Streaming in invoke failed, falling back: {e}")
-            
-            # Fallback to regular invoke
-            return original_invoke(input, config=config, **kwargs)
-        
-        # Apply the monkey patches using object.__setattr__ to bypass Pydantic validation
-        # Pydantic models don't allow setting arbitrary attributes, so we need to bypass it
-        object.__setattr__(llm, 'stream', patched_stream)
-        object.__setattr__(llm, 'invoke', patched_invoke)
-        print(f"[DEBUG] Monkey-patched LLM stream() and invoke() methods to track metrics")
-        
-        # Also try to set callbacks directly (in case they work)
+        # #region agent log
         try:
-            from langchain_core.callbacks import CallbackManager
-            
-            callback_manager = CallbackManager([streaming_metrics_callback])
-            
-            if hasattr(llm, 'callbacks'):
-                llm.callbacks = callback_manager
-                print(f"[DEBUG] Set callbacks directly on LLM via callbacks attribute")
-            elif hasattr(llm, 'callback_manager'):
-                llm.callback_manager = callback_manager
-                print(f"[DEBUG] Set callbacks directly on LLM via callback_manager attribute")
+            with open(log_path, "a") as f:
+                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "E", "location": "kubernetes_kyverno_update_streaming.py:565", "message": "CrewAI LLM initialized", "data": {"llm_type": type(crewai_llm).__name__, "llm_module": type(crewai_llm).__module__}, "timestamp": int(time.time() * 1000)}) + "\n")
         except Exception as e:
-            print(f"[DEBUG] Failed to set callbacks on LLM: {e}")
+            print(f"[DEBUG] Failed to write log: {e}")
+        # #endregion
+        
+        print(f"[DEBUG] Initialized CrewAI LLM: {type(crewai_llm).__name__}")
+        
+        # Intercept LiteLLM's completion() method to enable streaming and track metrics
+        # CrewAI's LLM uses LiteLLM internally, so we need to patch LiteLLM
+        try:
+            import litellm
+            print(f"[DEBUG] LiteLLM imported successfully: {litellm.__version__ if hasattr(litellm, '__version__') else 'unknown'}")
+            original_completion = litellm.completion
+            print(f"[DEBUG] Original litellm.completion: {original_completion}")
+            
+            def patched_completion(*args, **kwargs):
+                """Patch LiteLLM completion to enable streaming, track metrics, and return dict format."""
+                # #region agent log
+                try:
+                    with open(log_path, "a") as f:
+                        f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:597", "message": "litellm.completion() called", "data": {"stream_param": kwargs.get("stream", False), "model": kwargs.get("model"), "args_count": len(args)}, "timestamp": int(time.time() * 1000)}) + "\n")
+                except Exception as e:
+                    print(f"[DEBUG] Failed to log litellm.completion call: {e}")
+                # #endregion
+                
+                print(f"[DEBUG] litellm.completion() called with stream={kwargs.get('stream', False)}")
+                
+                # Check if caller wants streaming - if not, we'll stream internally but return dict
+                original_stream_param = kwargs.get("stream", False)
+                
+                # Force streaming to be enabled for metrics tracking
+                kwargs["stream"] = True
+                print(f"[DEBUG] Forced stream=True (was {original_stream_param})")
+                
+                # Call original completion with streaming enabled
+                try:
+                    response_stream = original_completion(*args, **kwargs)
+                    print(f"[DEBUG] Original completion returned: {type(response_stream)}")
+                except Exception as e:
+                    print(f"[DEBUG] Error calling original_completion: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    raise
+                
+                # Track metrics from the stream and accumulate response
+                request_start = time.time()
+                first_token_time = None
+                last_token_time = None
+                token_count = 0
+                accumulated_content = ""
+                accumulated_chunks = []
+                
+                # Consume the stream and track metrics
+                print(f"[DEBUG] Starting to consume stream for metrics tracking")
+                try:
+                    with open(log_path, "a") as f:
+                        f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:632", "message": "Starting to consume stream", "data": {}, "timestamp": int(time.time() * 1000)}) + "\n")
+                except Exception:
+                    pass
+                
+                for chunk in response_stream:
+                    current_time = time.time()
+                    print(f"[DEBUG] Received chunk: {type(chunk)}, has content: {hasattr(chunk, 'content') if chunk else False}")
+                    
+                    # Track first token (TTFT)
+                    if first_token_time is None:
+                        first_token_time = current_time
+                        ttft = first_token_time - request_start
+                        streaming_metrics_callback.all_ttft_values.append(ttft)
+                        # #region agent log
+                        try:
+                            with open(log_path, "a") as f:
+                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:650", "message": "First token received via litellm stream", "data": {"ttft": ttft, "token_count": token_count}, "timestamp": int(time.time() * 1000)}) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+                        if streaming_metrics_callback.debug:
+                            print(f"[DEBUG] First token received via litellm stream! TTFT: {ttft:.4f}s")
+                    
+                    last_token_time = current_time
+                    token_count += 1
+                    
+                    # Accumulate chunks for final response
+                    accumulated_chunks.append(chunk)
+                    # Extract content from chunk if available
+                    if hasattr(chunk, 'choices') and chunk.choices:
+                        delta = chunk.choices[0].delta if hasattr(chunk.choices[0], 'delta') else chunk.choices[0]
+                        if hasattr(delta, 'content') and delta.content:
+                            accumulated_content += delta.content
+                    elif hasattr(chunk, 'content'):
+                        accumulated_content += chunk.content
+                
+                # Calculate TGS after streaming completes
+                if first_token_time and last_token_time and token_count >= 2:
+                    generation_time = last_token_time - first_token_time
+                    if generation_time > 0:
+                        tokens_generated = token_count - 1
+                        tokens_per_second = tokens_generated / generation_time
+                        streaming_metrics_callback.all_tgs_values.append(tokens_per_second)
+                        # #region agent log
+                        try:
+                            with open(log_path, "a") as f:
+                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:675", "message": "TGS calculated via litellm stream", "data": {"tokens_per_second": tokens_per_second, "token_count": token_count}, "timestamp": int(time.time() * 1000)}) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+                        if streaming_metrics_callback.debug:
+                            print(f"[DEBUG] TGS calculated via litellm stream: {tokens_per_second:.2f} tokens/sec ({token_count} chunks)")
+                
+                # CrewAI expects a dictionary response, not a generator
+                # Build response in the format CrewAI expects: {"choices": [{"message": {"content": "..."}}]}
+                print(f"[DEBUG] Building dict response from {len(accumulated_chunks)} chunks, content length: {len(accumulated_content)}")
+                response_dict = {
+                    "choices": [{
+                        "message": {
+                            "content": accumulated_content
+                        }
+                    }]
+                }
+                
+                # Also preserve other fields from the last chunk if available
+                if accumulated_chunks:
+                    last_chunk = accumulated_chunks[-1]
+                    if hasattr(last_chunk, 'model'):
+                        response_dict["model"] = last_chunk.model
+                    if hasattr(last_chunk, 'usage'):
+                        response_dict["usage"] = last_chunk.usage
+                    if hasattr(last_chunk, 'id'):
+                        response_dict["id"] = last_chunk.id
+                
+                print(f"[DEBUG] Returning dict response with content length: {len(response_dict.get('choices', [{}])[0].get('message', {}).get('content', ''))}")
+                return response_dict
+            
+            # Patch litellm.completion
+            litellm.completion = patched_completion
+            
+            # Verify patch was applied
+            print(f"[DEBUG] Patched litellm.completion: {litellm.completion}")
+            print(f"[DEBUG] Patch is same function: {litellm.completion == patched_completion}")
+            
+            # #region agent log
+            try:
+                with open(log_path, "a") as f:
+                    f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:675", "message": "Patched litellm.completion to enable streaming", "data": {"patch_applied": litellm.completion == patched_completion}, "timestamp": int(time.time() * 1000)}) + "\n")
+            except Exception as e:
+                print(f"[DEBUG] Failed to log patch confirmation: {e}")
+            # #endregion
+            
+            print(f"[DEBUG] Patched litellm.completion to enable streaming and track metrics")
+            
+        except ImportError:
+            print(f"[WARN] litellm not available, cannot patch for streaming")
+        except Exception as e:
+            print(f"[WARN] Failed to patch litellm.completion: {e}")
+        
+        # Use CrewAI's LLM wrapper directly - LiteLLM patching will handle streaming
+        llm = crewai_llm
+        
+        # #region agent log
+        try:
+            with open(log_path, "a") as f:
+                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:680", "message": "Using CrewAI LLM wrapper with LiteLLM patching", "data": {"llm_type": type(llm).__name__}, "timestamp": int(time.time() * 1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+            """Wrapper around LangChain LLM that tracks streaming metrics."""
         
         test_agent = Agent(
             role="Test",
@@ -645,6 +782,11 @@ Once you get a final answer, you can quit the work.
             verbose=True,
             callbacks=[streaming_metrics_callback],  # Still pass callbacks in case they work
         )
+        
+        # #region agent log
+        with open(log_path, "a") as f:
+            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "kubernetes_kyverno_update_streaming.py:648", "message": "Agent created", "data": {"agent_llm_type": type(test_agent.llm).__name__ if hasattr(test_agent, 'llm') else None, "agent_llm_module": type(test_agent.llm).__module__ if hasattr(test_agent, 'llm') else None, "agent_llm_is_same": test_agent.llm is llm if hasattr(test_agent, 'llm') else None, "has_callbacks": hasattr(test_agent, 'callbacks'), "callback_count": len(test_agent.callbacks) if hasattr(test_agent, 'callbacks') else 0}, "timestamp": int(time.time() * 1000)}) + "\n")
+        # #endregion
         
         print(f"[DEBUG] Agent created with callbacks: {len(test_agent.callbacks) if hasattr(test_agent, 'callbacks') else 'N/A'}")
 
@@ -695,7 +837,18 @@ You can omit `namespace` in `updated_resource` if the policy is a cluster-scope 
             cache=False,
         )
         inputs = {}
+        
+        # #region agent log
+        with open(log_path, "a") as f:
+            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "kubernetes_kyverno_update_streaming.py:698", "message": "About to call crew.kickoff", "data": {"crew_agents_count": len(crew.agents) if hasattr(crew, 'agents') else 0, "crew_tasks_count": len(crew.tasks) if hasattr(crew, 'tasks') else 0}, "timestamp": int(time.time() * 1000)}) + "\n")
+        # #endregion
+        
         output = crew.kickoff(inputs=inputs)
+        
+        # #region agent log
+        with open(log_path, "a") as f:
+            f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:702", "message": "crew.kickoff completed", "data": {"ttft_count": len(streaming_metrics_callback.all_ttft_values), "tgs_count": len(streaming_metrics_callback.all_tgs_values)}, "timestamp": int(time.time() * 1000)}) + "\n")
+        # #endregion
         result_str = output.raw.strip()
         if not result_str:
             raise ValueError("crew agent returned an empty string.")
