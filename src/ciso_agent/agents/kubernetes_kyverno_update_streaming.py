@@ -669,7 +669,26 @@ Once you get a final answer, you can quit the work.
                 
                 for chunk in response_stream:
                     current_time = time.time()
-                    print(f"[DEBUG] Received chunk: {type(chunk)}, has content: {hasattr(chunk, 'content') if chunk else False}")
+                    
+                    # Debug chunk structure (only first few chunks to avoid spam)
+                    if token_count < 3:
+                        chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith('_')]
+                        chunk_dict = {}
+                        for attr in ['choices', 'content', 'delta', 'message']:
+                            if hasattr(chunk, attr):
+                                try:
+                                    val = getattr(chunk, attr)
+                                    chunk_dict[attr] = str(type(val)) if val is not None else None
+                                except:
+                                    chunk_dict[attr] = "error_accessing"
+                        print(f"[DEBUG] Chunk {token_count} structure: {chunk_dict}")
+                        # #region agent log
+                        try:
+                            with open(log_path, "a") as f:
+                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "kubernetes_kyverno_update_streaming.py:670", "message": "Chunk structure inspection", "data": {"chunk_num": token_count, "chunk_attrs": chunk_attrs[:10], "chunk_dict": chunk_dict}, "timestamp": int(time.time() * 1000)}) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
                     
                     # Track first token (TTFT)
                     if first_token_time is None:
@@ -679,7 +698,7 @@ Once you get a final answer, you can quit the work.
                         # #region agent log
                         try:
                             with open(log_path, "a") as f:
-                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:650", "message": "First token received via litellm stream", "data": {"ttft": ttft, "token_count": token_count}, "timestamp": int(time.time() * 1000)}) + "\n")
+                                f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "kubernetes_kyverno_update_streaming.py:690", "message": "First token received via litellm stream", "data": {"ttft": ttft, "token_count": token_count}, "timestamp": int(time.time() * 1000)}) + "\n")
                         except Exception:
                             pass
                         # #endregion
@@ -691,13 +710,41 @@ Once you get a final answer, you can quit the work.
                     
                     # Accumulate chunks for final response
                     accumulated_chunks.append(chunk)
-                    # Extract content from chunk if available
-                    if hasattr(chunk, 'choices') and chunk.choices:
-                        delta = chunk.choices[0].delta if hasattr(chunk.choices[0], 'delta') else chunk.choices[0]
-                        if hasattr(delta, 'content') and delta.content:
-                            accumulated_content += delta.content
-                    elif hasattr(chunk, 'content'):
-                        accumulated_content += chunk.content
+                    
+                    # Extract content from chunk - LiteLLM ModelResponseStream structure
+                    chunk_content = None
+                    try:
+                        # Try multiple extraction methods based on LiteLLM's structure
+                        if hasattr(chunk, 'choices') and chunk.choices and len(chunk.choices) > 0:
+                            choice = chunk.choices[0]
+                            # Check for delta.content (streaming format)
+                            if hasattr(choice, 'delta') and choice.delta:
+                                if hasattr(choice.delta, 'content') and choice.delta.content:
+                                    chunk_content = choice.delta.content
+                            # Check for message.content (final format)
+                            elif hasattr(choice, 'message') and choice.message:
+                                if hasattr(choice.message, 'content') and choice.message.content:
+                                    chunk_content = choice.message.content
+                            # Check for direct content
+                            elif hasattr(choice, 'content') and choice.content:
+                                chunk_content = choice.content
+                        # Direct content attribute
+                        elif hasattr(chunk, 'content') and chunk.content:
+                            chunk_content = chunk.content
+                        
+                        if chunk_content:
+                            accumulated_content += chunk_content
+                    except Exception as e:
+                        # Log extraction errors but continue
+                        if token_count <= 3:
+                            print(f"[DEBUG] Content extraction error: {e}")
+                            # #region agent log
+                            try:
+                                with open(log_path, "a") as f:
+                                    f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "kubernetes_kyverno_update_streaming.py:730", "message": "Content extraction error", "data": {"error": str(e), "chunk_type": str(type(chunk))}, "timestamp": int(time.time() * 1000)}) + "\n")
+                            except Exception:
+                                pass
+                            # #endregion
                 
                 # Calculate TGS after streaming completes
                 if first_token_time and last_token_time and token_count >= 2:
