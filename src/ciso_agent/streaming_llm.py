@@ -89,13 +89,14 @@ def init_streaming_llm(model: str = "", api_url: str = "", api_key: str = ""):
         )
     elif "gpt" in model.lower() or "qwen" in model.lower():
         # ChatOpenAI supports streaming via .stream() method
-        # Note: streaming=True is for callback-based streaming with .invoke()
-        # The .stream() method works independently and doesn't need streaming=True
+        # For CrewAI/LiteLLM compatibility, enable streaming=True to use callback-based streaming
+        # This allows callbacks to work when CrewAI uses .invoke() internally
         return ChatOpenAI(
             temperature=temperature, 
             model=model, 
             api_key=api_key, 
-            base_url=api_url
+            base_url=api_url,
+            streaming=True  # Enable streaming for callback support
         )
     
     # Default fallback: try ChatOpenAI

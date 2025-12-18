@@ -24,21 +24,24 @@ from langgraph.graph import END, StateGraph
 
 from ciso_agent.agents.kubernetes_kubectl_opa import KubernetesKubectlOPACrew
 from ciso_agent.agents.kubernetes_kyverno import KubernetesKyvernoCrew
+from ciso_agent.agents.kubernetes_kyverno_update_streaming import KubernetesKyvernoUpdateCrew
 from ciso_agent.agents.rhel_playbook_opa import RHELPlaybookOPACrew
-from ciso_agent.agents.ttft_benchmark import TTFTBenchmarkAgent
-from ciso_agent.agents.token_generation_speed_benchmark import TokenGenerationSpeedBenchmarkAgent
 from ciso_agent.agents.context_window_utilization_benchmark import ContextWindowUtilizationBenchmarkAgent
 from ciso_agent.llm import get_llm_params, call_llm, extract_code
 
-load_dotenv()
+# Load .env file - check Docker mount path first, then current directory
+docker_env_path = "/etc/ciso-agent/.env"
+if os.path.exists(docker_env_path):
+    load_dotenv(docker_env_path)
+else:
+    load_dotenv()
 
 kubernetes_kyverno_crew = KubernetesKyvernoCrew()
 print("Using KubernetesKyvernoCrew agent")
 
+kubernetes_kyverno_update_streaming_crew = KubernetesKyvernoUpdateCrew()
 kubernetes_kubectl_opa_crew = KubernetesKubectlOPACrew()
 rhel_playbook_opa_crew = RHELPlaybookOPACrew()
-ttft_benchmark_agent = TTFTBenchmarkAgent()
-token_generation_speed_agent = TokenGenerationSpeedBenchmarkAgent()
 context_window_utilization_agent = ContextWindowUtilizationBenchmarkAgent()
 
 
@@ -60,18 +63,6 @@ sub_agent_descs = {
         "tool": rhel_playbook_opa_crew.tool_description,
         "input": rhel_playbook_opa_crew.input_description,
         "output": rhel_playbook_opa_crew.output_description,
-    },
-    "ttft_benchmark": {
-        "goal": ttft_benchmark_agent.agent_goal,
-        "tool": ttft_benchmark_agent.tool_description,
-        "input": ttft_benchmark_agent.input_description,
-        "output": ttft_benchmark_agent.output_description,
-    },
-    "token_generation_speed_benchmark": {
-        "goal": token_generation_speed_agent.agent_goal,
-        "tool": token_generation_speed_agent.tool_description,
-        "input": token_generation_speed_agent.input_description,
-        "output": token_generation_speed_agent.output_description,
     },
     "context_window_utilization_benchmark": {
         "goal": context_window_utilization_agent.agent_goal,
@@ -116,10 +107,9 @@ class CISOManager:
         workflow.add_node("task_selector", self.task_selector)
         workflow.add_node("task_handler", self.task_handler)
         workflow.add_node("kubernetes_kyverno", kubernetes_kyverno_crew.kickoff)
+        workflow.add_node("kubernetes_kyverno_update_streaming", kubernetes_kyverno_update_streaming_crew.kickoff)
         workflow.add_node("kubernetes_kubectl_opa", kubernetes_kubectl_opa_crew.kickoff)
         workflow.add_node("rhel_playbook_opa", rhel_playbook_opa_crew.kickoff)
-        workflow.add_node("ttft_benchmark", ttft_benchmark_agent.kickoff)
-        workflow.add_node("token_generation_speed_benchmark", token_generation_speed_agent.kickoff)
         workflow.add_node("context_window_utilization_benchmark", context_window_utilization_agent.kickoff)
         workflow.add_node("reporter", self.reporter)
 
@@ -130,10 +120,9 @@ class CISOManager:
             self.switch_routes,
         )
         workflow.add_edge("kubernetes_kyverno", "task_handler")
+        workflow.add_edge("kubernetes_kyverno_update_streaming", "task_handler")
         workflow.add_edge("kubernetes_kubectl_opa", "task_handler")
         workflow.add_edge("rhel_playbook_opa", "task_handler")
-        workflow.add_edge("ttft_benchmark", "task_handler")
-        workflow.add_edge("token_generation_speed_benchmark", "task_handler")
         workflow.add_edge("context_window_utilization_benchmark", "task_handler")
         workflow.add_edge("reporter", END)
 
@@ -215,30 +204,24 @@ Expected Output:
         # Task Selection
         agent_task = None
         goal_lower = goal.lower()
-        # Debug: print goal for troubleshooting
-        print(f"[DEBUG] Goal length: {len(goal)}, Goal lower (first 200 chars): {goal_lower[:200]}")
-        print(f"[DEBUG] 'ttft' in goal_lower: {'ttft' in goal_lower}")
-        print(f"[DEBUG] 'time to first token' in goal_lower: {'time to first token' in goal_lower}")
-        if "ttft" in goal_lower or "time to first token" in goal_lower:
-            agent_task = Action(
-                description="ttft_benchmark",
-                node="ttft_benchmark",
-            )
-        elif "token generation speed" in goal_lower or "tokens/sec" in goal_lower or "tokens per second" in goal_lower:
-            agent_task = Action(
-                description="token_generation_speed_benchmark",
-                node="token_generation_speed_benchmark",
-            )
-        elif "context window utilization" in goal_lower or "cwu" in goal_lower or ("context window" in goal_lower and "utilization" in goal_lower):
+        if "context window utilization" in goal_lower or "cwu" in goal_lower or ("context window" in goal_lower and "utilization" in goal_lower):
             agent_task = Action(
                 description="context_window_utilization_benchmark",
                 node="context_window_utilization_benchmark",
             )
         elif "kyverno" in goal_lower:
-            agent_task = Action(
-                description="kubernetes_kyverno",
-                node="kubernetes_kyverno",
-            )
+            # Check if it's an update task with streaming metrics
+            if ("streaming" in goal_lower or "ttft" in goal_lower or "token generation speed" in goal_lower or 
+                 "tokens/sec" in goal_lower or "tokens per second" in goal_lower):
+                agent_task = Action(
+                    description="kubernetes_kyverno_update_streaming",
+                    node="kubernetes_kyverno_update_streaming",
+                )
+            else:
+                agent_task = Action(
+                    description="kubernetes_kyverno",
+                    node="kubernetes_kyverno",
+                )
         elif "kubectl" in goal_lower and "opa" in goal_lower:
             agent_task = Action(
                 description="kubernetes_kubectl_opa",
@@ -279,14 +262,13 @@ Expected Output:
         next_index = task_index + 1
         return {"route": route, "task_index": next_index}
 
-    def switch_routes(self, state: CISOState) -> Literal["kubernetes_kyverno", "kubernetes_kubectl_opa", "rhel_playbook_opa", "ttft_benchmark", "token_generation_speed_benchmark", "context_window_utilization_benchmark", "reporter"]:
+    def switch_routes(self, state: CISOState) -> Literal["kubernetes_kyverno", "kubernetes_kyverno_update_streaming", "kubernetes_kubectl_opa", "rhel_playbook_opa", "context_window_utilization_benchmark", "reporter"]:
         route = state["route"]
         crew_nodes = [
             "kubernetes_kyverno",
+            "kubernetes_kyverno_update_streaming",
             "kubernetes_kubectl_opa",
             "rhel_playbook_opa",
-            "ttft_benchmark",
-            "token_generation_speed_benchmark",
             "context_window_utilization_benchmark",
             "reporter",
         ]
