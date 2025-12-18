@@ -195,7 +195,6 @@ Once you get a final answer, you can quit the work.
                                 if hasattr(start_time, 'timestamp') and hasattr(first_token_time, 'timestamp'):
                                     ttft = (first_token_time.timestamp() - start_time.timestamp())
                                     ttft_values.append(ttft)
-                                    metrics_callback.all_ttft_values.append(ttft)
                     
                     # Try to calculate TGS from token counts and timing
                     if hasattr(obs, 'usage') and obs.usage:
@@ -221,7 +220,6 @@ Once you get a final answer, you can quit the work.
                                         tokens_generated = output_tokens - 1
                                         tgs = tokens_generated / generation_time
                                         tgs_values.append(tgs)
-                                        metrics_callback.all_tgs_values.append(tgs)
                 
                 # Alternative: Check for timing in the observation's data/response
                 if hasattr(obs, 'output') and obs.output:
