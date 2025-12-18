@@ -25,6 +25,7 @@ from langgraph.graph import END, StateGraph
 from ciso_agent.agents.kubernetes_kubectl_opa import KubernetesKubectlOPACrew
 from ciso_agent.agents.kubernetes_kubectl_opa_streaming import KubernetesKubectlOPACrew as KubernetesKubectlOPAStreamingCrew
 from ciso_agent.agents.kubernetes_kyverno import KubernetesKyvernoCrew
+from ciso_agent.agents.kubernetes_kyverno_streaming import KubernetesKyvernoCrew as KubernetesKyvernoStreamingCrew
 from ciso_agent.agents.kubernetes_kyverno_update_streaming import KubernetesKyvernoUpdateCrew
 from ciso_agent.agents.rhel_playbook_opa import RHELPlaybookOPACrew
 from ciso_agent.agents.context_window_utilization_benchmark import ContextWindowUtilizationBenchmarkAgent
@@ -40,6 +41,7 @@ else:
 kubernetes_kyverno_crew = KubernetesKyvernoCrew()
 print("Using KubernetesKyvernoCrew agent")
 
+kubernetes_kyverno_streaming_crew = KubernetesKyvernoStreamingCrew()
 kubernetes_kyverno_update_streaming_crew = KubernetesKyvernoUpdateCrew()
 kubernetes_kubectl_opa_crew = KubernetesKubectlOPACrew()
 kubernetes_kubectl_opa_streaming_crew = KubernetesKubectlOPAStreamingCrew()
@@ -53,6 +55,12 @@ sub_agent_descs = {
         "tool": kubernetes_kyverno_crew.tool_description,
         "input": kubernetes_kyverno_crew.input_description,
         "output": kubernetes_kyverno_crew.output_description,
+    },
+    "kubernetes_kyverno_streaming": {
+        "goal": kubernetes_kyverno_streaming_crew.agent_goal,
+        "tool": kubernetes_kyverno_streaming_crew.tool_description,
+        "input": kubernetes_kyverno_streaming_crew.input_description,
+        "output": kubernetes_kyverno_streaming_crew.output_description,
     },
     "kubernetes_kubectl_opa": {
         "goal": kubernetes_kubectl_opa_crew.agent_goal,
@@ -115,6 +123,7 @@ class CISOManager:
         workflow.add_node("task_selector", self.task_selector)
         workflow.add_node("task_handler", self.task_handler)
         workflow.add_node("kubernetes_kyverno", kubernetes_kyverno_crew.kickoff)
+        workflow.add_node("kubernetes_kyverno_streaming", kubernetes_kyverno_streaming_crew.kickoff)
         workflow.add_node("kubernetes_kyverno_update_streaming", kubernetes_kyverno_update_streaming_crew.kickoff)
         workflow.add_node("kubernetes_kubectl_opa", kubernetes_kubectl_opa_crew.kickoff)
         workflow.add_node("kubernetes_kubectl_opa_streaming", kubernetes_kubectl_opa_streaming_crew.kickoff)
@@ -129,6 +138,7 @@ class CISOManager:
             self.switch_routes,
         )
         workflow.add_edge("kubernetes_kyverno", "task_handler")
+        workflow.add_edge("kubernetes_kyverno_streaming", "task_handler")
         workflow.add_edge("kubernetes_kyverno_update_streaming", "task_handler")
         workflow.add_edge("kubernetes_kubectl_opa", "task_handler")
         workflow.add_edge("kubernetes_kubectl_opa_streaming", "task_handler")
@@ -220,13 +230,20 @@ Expected Output:
                 node="context_window_utilization_benchmark",
             )
         elif "kyverno" in goal_lower:
-            # Check if it's an update task with streaming metrics
+            # Check if it's a streaming task with streaming metrics
             if ("streaming" in goal_lower or "ttft" in goal_lower or "token generation speed" in goal_lower or 
                  "tokens/sec" in goal_lower or "tokens per second" in goal_lower):
-                agent_task = Action(
-                    description="kubernetes_kyverno_update_streaming",
-                    node="kubernetes_kyverno_update_streaming",
-                )
+                # Check if it's an update task
+                if "update" in goal_lower:
+                    agent_task = Action(
+                        description="kubernetes_kyverno_update_streaming",
+                        node="kubernetes_kyverno_update_streaming",
+                    )
+                else:
+                    agent_task = Action(
+                        description="kubernetes_kyverno_streaming",
+                        node="kubernetes_kyverno_streaming",
+                    )
             else:
                 agent_task = Action(
                     description="kubernetes_kyverno",
@@ -280,10 +297,11 @@ Expected Output:
         next_index = task_index + 1
         return {"route": route, "task_index": next_index}
 
-    def switch_routes(self, state: CISOState) -> Literal["kubernetes_kyverno", "kubernetes_kyverno_update_streaming", "kubernetes_kubectl_opa", "kubernetes_kubectl_opa_streaming", "rhel_playbook_opa", "context_window_utilization_benchmark", "reporter"]:
+    def switch_routes(self, state: CISOState) -> Literal["kubernetes_kyverno", "kubernetes_kyverno_streaming", "kubernetes_kyverno_update_streaming", "kubernetes_kubectl_opa", "kubernetes_kubectl_opa_streaming", "rhel_playbook_opa", "context_window_utilization_benchmark", "reporter"]:
         route = state["route"]
         crew_nodes = [
             "kubernetes_kyverno",
+            "kubernetes_kyverno_streaming",
             "kubernetes_kyverno_update_streaming",
             "kubernetes_kubectl_opa",
             "kubernetes_kubectl_opa_streaming",
