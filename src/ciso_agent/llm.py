@@ -77,6 +77,13 @@ def init_agent_llm(model: str = "", api_url: str = "", api_key: str = ""):
             api_key=api_key,
             temperature=temperature,
         )
+    elif "gemma" in model.lower():
+        llm = LLM(
+            model= "gemma/"+model,
+            base_url=api_url,
+            api_key=api_key,
+            temperature=temperature,
+        )
     elif "qwen" in model.lower():
         llm = LLM(
             model= "hosted_vllm/"+model,
@@ -109,7 +116,7 @@ def init_llm(model: str = "", api_url: str = "", api_key: str = ""):
         if "api-version" in params:
             kwargs["api_version"] = params["api-version"]
         return AzureChatOpenAI(temperature=temperature, model=model, api_key=api_key, base_url=api_url, **kwargs)
-    elif "gemini" in model.lower():
+    elif "gemini" in model.lower() or "gemma" in model.lower():
         return ChatGoogleGenerativeAI(model=model, google_api_key=api_key, temperature=temperature)
     elif "gpt" in model.lower() or "qwen" in model.lower():
         return ChatOpenAI(temperature=temperature, model=model, api_key=api_key, base_url=api_url)
