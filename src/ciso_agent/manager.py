@@ -31,12 +31,7 @@ from ciso_agent.agents.rhel_playbook_opa import RHELPlaybookOPACrew
 from ciso_agent.agents.rhel_playbook_opa_streaming import RHELPlaybookOPACrew as RHELPlaybookOPAStreamingCrew
 from ciso_agent.llm import get_llm_params, call_llm, extract_code
 
-# Load .env file - check Docker mount path first, then current directory
-docker_env_path = "/etc/ciso-agent/.env"
-if os.path.exists(docker_env_path):
-    load_dotenv(docker_env_path)
-else:
-    load_dotenv()
+load_dotenv()
 
 kubernetes_kyverno_crew = KubernetesKyvernoCrew()
 print("Using KubernetesKyvernoCrew agent")

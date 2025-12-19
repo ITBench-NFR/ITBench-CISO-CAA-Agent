@@ -35,12 +35,7 @@ from ciso_agent.tools.generate_kyverno import GenerateKyvernoTool
 from ciso_agent.tools.run_kubectl import RunKubectlTool
 from ciso_agent.vllm_metrics import VLLMMetricsCollector, is_vllm_metrics_enabled
 
-# Load .env file - check Docker mount path first, then current directory
-docker_env_path = "/etc/ciso-agent/.env"
-if os.path.exists(docker_env_path):
-    load_dotenv(docker_env_path)
-else:
-    load_dotenv()
+load_dotenv()
 
 langfuse = get_client()
 
