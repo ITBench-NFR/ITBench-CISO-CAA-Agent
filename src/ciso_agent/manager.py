@@ -23,10 +23,12 @@ from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph
 
 from ciso_agent.agents.kubernetes_kubectl_opa import KubernetesKubectlOPACrew
+from ciso_agent.agents.kubernetes_kubectl_opa_streaming import KubernetesKubectlOPACrew as KubernetesKubectlOPAStreamingCrew
 from ciso_agent.agents.kubernetes_kyverno import KubernetesKyvernoCrew
+from ciso_agent.agents.kubernetes_kyverno_streaming import KubernetesKyvernoCrew as KubernetesKyvernoStreamingCrew
+from ciso_agent.agents.kubernetes_kyverno_update_streaming import KubernetesKyvernoUpdateCrew
 from ciso_agent.agents.rhel_playbook_opa import RHELPlaybookOPACrew
-from ciso_agent.agents.ttft_benchmark import TTFTBenchmarkAgent
-from ciso_agent.agents.token_generation_speed_benchmark import TokenGenerationSpeedBenchmarkAgent
+from ciso_agent.agents.rhel_playbook_opa_streaming import RHELPlaybookOPACrew as RHELPlaybookOPAStreamingCrew
 from ciso_agent.llm import get_llm_params, call_llm, extract_code
 
 load_dotenv()
@@ -34,10 +36,12 @@ load_dotenv()
 kubernetes_kyverno_crew = KubernetesKyvernoCrew()
 print("Using KubernetesKyvernoCrew agent")
 
+kubernetes_kyverno_streaming_crew = KubernetesKyvernoStreamingCrew()
+kubernetes_kyverno_update_streaming_crew = KubernetesKyvernoUpdateCrew()
 kubernetes_kubectl_opa_crew = KubernetesKubectlOPACrew()
+kubernetes_kubectl_opa_streaming_crew = KubernetesKubectlOPAStreamingCrew()
 rhel_playbook_opa_crew = RHELPlaybookOPACrew()
-ttft_benchmark_agent = TTFTBenchmarkAgent()
-token_generation_speed_agent = TokenGenerationSpeedBenchmarkAgent()
+rhel_playbook_opa_streaming_crew = RHELPlaybookOPAStreamingCrew()
 
 
 sub_agent_descs = {
@@ -47,11 +51,23 @@ sub_agent_descs = {
         "input": kubernetes_kyverno_crew.input_description,
         "output": kubernetes_kyverno_crew.output_description,
     },
+    "kubernetes_kyverno_streaming": {
+        "goal": kubernetes_kyverno_streaming_crew.agent_goal,
+        "tool": kubernetes_kyverno_streaming_crew.tool_description,
+        "input": kubernetes_kyverno_streaming_crew.input_description,
+        "output": kubernetes_kyverno_streaming_crew.output_description,
+    },
     "kubernetes_kubectl_opa": {
         "goal": kubernetes_kubectl_opa_crew.agent_goal,
         "tool": kubernetes_kubectl_opa_crew.tool_description,
         "input": kubernetes_kubectl_opa_crew.input_description,
         "output": kubernetes_kubectl_opa_crew.output_description,
+    },
+    "kubernetes_kubectl_opa_streaming": {
+        "goal": kubernetes_kubectl_opa_streaming_crew.agent_goal,
+        "tool": kubernetes_kubectl_opa_streaming_crew.tool_description,
+        "input": kubernetes_kubectl_opa_streaming_crew.input_description,
+        "output": kubernetes_kubectl_opa_streaming_crew.output_description,
     },
     "rhel_playbook_opa": {
         "goal": rhel_playbook_opa_crew.agent_goal,
@@ -59,17 +75,11 @@ sub_agent_descs = {
         "input": rhel_playbook_opa_crew.input_description,
         "output": rhel_playbook_opa_crew.output_description,
     },
-    "ttft_benchmark": {
-        "goal": ttft_benchmark_agent.agent_goal,
-        "tool": ttft_benchmark_agent.tool_description,
-        "input": ttft_benchmark_agent.input_description,
-        "output": ttft_benchmark_agent.output_description,
-    },
-    "token_generation_speed_benchmark": {
-        "goal": token_generation_speed_agent.agent_goal,
-        "tool": token_generation_speed_agent.tool_description,
-        "input": token_generation_speed_agent.input_description,
-        "output": token_generation_speed_agent.output_description,
+    "rhel_playbook_opa_streaming": {
+        "goal": rhel_playbook_opa_streaming_crew.agent_goal,
+        "tool": rhel_playbook_opa_streaming_crew.tool_description,
+        "input": rhel_playbook_opa_streaming_crew.input_description,
+        "output": rhel_playbook_opa_streaming_crew.output_description,
     },
 }
 
@@ -108,10 +118,12 @@ class CISOManager:
         workflow.add_node("task_selector", self.task_selector)
         workflow.add_node("task_handler", self.task_handler)
         workflow.add_node("kubernetes_kyverno", kubernetes_kyverno_crew.kickoff)
+        workflow.add_node("kubernetes_kyverno_streaming", kubernetes_kyverno_streaming_crew.kickoff)
+        workflow.add_node("kubernetes_kyverno_update_streaming", kubernetes_kyverno_update_streaming_crew.kickoff)
         workflow.add_node("kubernetes_kubectl_opa", kubernetes_kubectl_opa_crew.kickoff)
+        workflow.add_node("kubernetes_kubectl_opa_streaming", kubernetes_kubectl_opa_streaming_crew.kickoff)
         workflow.add_node("rhel_playbook_opa", rhel_playbook_opa_crew.kickoff)
-        workflow.add_node("ttft_benchmark", ttft_benchmark_agent.kickoff)
-        workflow.add_node("token_generation_speed_benchmark", token_generation_speed_agent.kickoff)
+        workflow.add_node("rhel_playbook_opa_streaming", rhel_playbook_opa_streaming_crew.kickoff)
         workflow.add_node("reporter", self.reporter)
 
         workflow.set_entry_point("task_selector")
@@ -121,10 +133,12 @@ class CISOManager:
             self.switch_routes,
         )
         workflow.add_edge("kubernetes_kyverno", "task_handler")
+        workflow.add_edge("kubernetes_kyverno_streaming", "task_handler")
+        workflow.add_edge("kubernetes_kyverno_update_streaming", "task_handler")
         workflow.add_edge("kubernetes_kubectl_opa", "task_handler")
+        workflow.add_edge("kubernetes_kubectl_opa_streaming", "task_handler")
         workflow.add_edge("rhel_playbook_opa", "task_handler")
-        workflow.add_edge("ttft_benchmark", "task_handler")
-        workflow.add_edge("token_generation_speed_benchmark", "task_handler")
+        workflow.add_edge("rhel_playbook_opa_streaming", "task_handler")
         workflow.add_edge("reporter", END)
 
         self.app = workflow.compile()
@@ -205,31 +219,52 @@ Expected Output:
         # Task Selection
         agent_task = None
         goal_lower = goal.lower()
-        if "ttft" in goal_lower or "time to first token" in goal_lower:
-            agent_task = Action(
-                description="ttft_benchmark",
-                node="ttft_benchmark",
-            )
-        elif "token generation speed" in goal_lower or "tokens/sec" in goal_lower or "tokens per second" in goal_lower:
-            agent_task = Action(
-                description="token_generation_speed_benchmark",
-                node="token_generation_speed_benchmark",
-            )
-        elif "kyverno" in goal_lower:
-            agent_task = Action(
-                description="kubernetes_kyverno",
-                node="kubernetes_kyverno",
-            )
+        if "kyverno" in goal_lower:
+            # Check if it's a streaming task with streaming metrics
+            if ("streaming" in goal_lower or "ttft" in goal_lower or "token generation speed" in goal_lower or 
+                 "tokens/sec" in goal_lower or "tokens per second" in goal_lower):
+                # Check if it's an update task
+                if "update" in goal_lower:
+                    agent_task = Action(
+                        description="kubernetes_kyverno_update_streaming",
+                        node="kubernetes_kyverno_update_streaming",
+                    )
+                else:
+                    agent_task = Action(
+                        description="kubernetes_kyverno_streaming",
+                        node="kubernetes_kyverno_streaming",
+                    )
+            else:
+                agent_task = Action(
+                    description="kubernetes_kyverno",
+                    node="kubernetes_kyverno",
+                )
         elif "kubectl" in goal_lower and "opa" in goal_lower:
-            agent_task = Action(
-                description="kubernetes_kubectl_opa",
-                node="kubernetes_kubectl_opa",
-            )
+            # Check if it's a streaming task with streaming metrics
+            if ("streaming" in goal_lower or "ttft" in goal_lower or "token generation speed" in goal_lower or 
+                 "tokens/sec" in goal_lower or "tokens per second" in goal_lower):
+                agent_task = Action(
+                    description="kubernetes_kubectl_opa_streaming",
+                    node="kubernetes_kubectl_opa_streaming",
+                )
+            else:
+                agent_task = Action(
+                    description="kubernetes_kubectl_opa",
+                    node="kubernetes_kubectl_opa",
+                )
         elif "rhel" in goal_lower and "playbook" in goal_lower:
-            agent_task = Action(
-                description="rhel_playbook_opa",
-                node="rhel_playbook_opa",
-            )
+            # Check if it's a streaming task with streaming metrics
+            if ("streaming" in goal_lower or "ttft" in goal_lower or "token generation speed" in goal_lower or 
+                 "tokens/sec" in goal_lower or "tokens per second" in goal_lower):
+                agent_task = Action(
+                    description="rhel_playbook_opa_streaming",
+                    node="rhel_playbook_opa_streaming",
+                )
+            else:
+                agent_task = Action(
+                    description="rhel_playbook_opa",
+                    node="rhel_playbook_opa",
+                )
         else:
             raise ValueError(f"failed to find an appropriate agent for this task goal: {goal}")
         reporter_task = Action(
@@ -260,14 +295,16 @@ Expected Output:
         next_index = task_index + 1
         return {"route": route, "task_index": next_index}
 
-    def switch_routes(self, state: CISOState) -> Literal["kubernetes_kyverno", "kubernetes_kubectl_opa", "rhel_playbook_opa", "ttft_benchmark", "token_generation_speed_benchmark", "reporter"]:
+    def switch_routes(self, state: CISOState) -> Literal["kubernetes_kyverno", "kubernetes_kyverno_streaming", "kubernetes_kyverno_update_streaming", "kubernetes_kubectl_opa", "kubernetes_kubectl_opa_streaming", "rhel_playbook_opa", "rhel_playbook_opa_streaming", "reporter"]:
         route = state["route"]
         crew_nodes = [
             "kubernetes_kyverno",
+            "kubernetes_kyverno_streaming",
+            "kubernetes_kyverno_update_streaming",
             "kubernetes_kubectl_opa",
+            "kubernetes_kubectl_opa_streaming",
             "rhel_playbook_opa",
-            "ttft_benchmark",
-            "token_generation_speed_benchmark",
+            "rhel_playbook_opa_streaming",
             "reporter",
         ]
         if route and route in crew_nodes:
