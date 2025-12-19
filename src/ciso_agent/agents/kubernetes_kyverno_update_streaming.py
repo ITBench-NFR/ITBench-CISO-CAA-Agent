@@ -545,7 +545,6 @@ Once you get a final answer, you can quit the work.
         except Exception:
             pass
         # #endregion
-            """Wrapper around LangChain LLM that tracks streaming metrics."""
         
         test_agent = Agent(
             role="Test",
